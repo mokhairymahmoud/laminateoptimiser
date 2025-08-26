@@ -1,0 +1,357 @@
+**Globally Convergent Optimisation Iteration** 
+1: procedure DampingMultiply(ξ,η)
+2: if ξ<0 then
+3: η←1 + (1−ρL) tanh ξ
+1−ρL
+4: else
+5: η←1 + ξ
+6: end if
+7: end procedure
+1: procedure UpdateDamping(f,˘
+f,d,ρ)
+2: for i= 1 ...n do
+˘
+3: ξ←fi−
+fi
+d
+4: DampingMultiply(ξ,η)
+5: ρi ←ηρi
+6: end for
+7: end procedure
+1: procedure SubIteration(xref ,f,d,ρ,x)
+2: Optimiser(@Approximation(xref ,d,ρ),x,
+3: UpdateDamping(f,˘
+f,d,ρ)
+4: end procedure
+˘
+f)
+1: procedure GlobalOptimiser(x,ρ,d)
+2: FEMSolver(x,f)
+3: xref = x; fref = f
+4: flagOptimiser= false
+5: while flagOptimiser= false do
+6: SubIteration(xref ,fref ,d,ρ,x)
+7: FEMSolver(x,f)
+8: DampingVector(xref
+,x,d)
+9: if {max fi <max fref
+i |i∈O}&{fi <0|i∈¯
+O}then
+10: xref = x; fref = f
+11: if {fi/fref
+i−1 <0|i∈O}then
+12: flagOptimiser= true
+13: end if
+14: end if
+15: end while
+16: end procedure
+
+**-------------------------------------------**
+**An Interior Point Method for Separable Problems**
+Algorithm 1 internal procedures
+1: function DualityGap( )
+2: gap←(s + ds) ∗(y + dy)
+3: for j = 1 ...m do
+4: gap←gap+ Sidej.DualityGap( )
+5: end for
+6: return gap
+7: end function
+1: procedure CalculateResiduals(µ,f,G)
+2: ds ←µ1−s ∗y−ds ∗dy
+3: dy ←f−oz+ ds
+4: for j = 1 ...m do
+5: dxj ←0
+6: Sidej.CalculateResiduals(µ,xj ,dxj )
+7: end for
+8: dx ←dx−Gdy
+9: dx′←B−1dx
+10: dy ←dy + Gtdx′
+11: dyI |dyc
+t
+←P dy
+12: dy′
+I ←D−1
+I,I dyI
+13: dz←−1 + oty
+14: dz←dz+ oI
+tdy′
+I
+15: dyc ←dyc + dc
+tdy′
+I
+16: end procedure
+**------------------------------------------**
+1: procedure UpdateIncrements(G)
+2: f ←ed+ q2
+3: dz←ddz+qdyc
+f
+4: dyc ←dyc−qdz
+d
+5: dyI ←dyI−dcdyc−oI dz
+6: dyI ←D−1
+I,I dyI
+7: dy ←P t dyI |dyc
+t
+8: ds ←(ds−s ∗dy)/y
+9: dx ←dx−Gdy
+10: dx ←B−1dx
+11: for j = 1 ...m do
+12: Sidej.UpdateIncrements(dxj )
+13: end for
+14: end procedure
+1: procedure CalculateHessian(G,B)
+2: for j = 1 ...m do
+3: Bj ←0
+4: Sidej.CalculateHessian(Bj )
+5: for i= 1 ...n do
+∂2fij
+6: Bj ←Bj + yi
+7: end for
+8: end for
+9: for i= 1 ...n do
+10: Gi ←∇xfi
+11: end for
+12: G′←B−1G
+13: D ←(s/y)
+14: D ←D + GtG′
+15:
+DI,I dc
+dc
+t d ←P DP t
+16: oI |1 t
+←P o
+17: d′
+c ←D−1
+I,I dc
+18: o′
+I ←D−1
+I,I oI
+19: d←d−dc
+td′
+c
+20: q←1−dc
+to′
+I
+21: e←oI
+to′
+I
+22: end procedure
+**--------------------------------------**
+1: function StepSize(αp,αd)
+2: αp ←StepSize(z,dz)
+3: αp ←StepSize(s,ds)
+4: αd ←StepSize(y,dy)
+5: αp ←StepSize(x,dx)
+6: for j = 1 ...m do
+7: Sidej.StepSize(αpj ,αdj )
+8: αp ←min{αp,αpj }
+9: αd ←min{αd,αdj }
+10: end for
+11: end function
+1: procedure UpdateVariables(αp,αd)
+2: x ←x + αpdx
+3: s ←s + αpds
+4: y ←y + αddy
+5: z←z+ αpdz
+6: for j = 1 ...m do
+7: Sidej.UpdateVariables(αp,αd)
+8: end for
+9: end procedure
+1: procedure CreatPermutationMatrix(f,o,P )
+2: for i= 1 ...n do
+3: index′[i] ←i
+4: end for
+5: ShellSort(f,index′)
+6: ic ←1
+7: while o[index′[ic]] ̸= 1 do
+8: ic ←ic + 1
+9: end while
+10: for i= 1...(ic−1) do
+11: index[i] ←index′[i]
+12: end for
+13: for i= (ic + 1) ...n do
+14: index[i] ←index′[i]
+15: end for
+16: index[n] ←index′[ic]
+17: P ←0
+18: for i= 1 ...n do
+19: P[i,index[i]] ←1
+20: end for
+21: end procedure
+**---------------------------------**
+1: procedure Solver(x)
+2: Initialise(1,x)
+3: ∆ ←DualityGap( )
+4: while ∆ >tol do
+5: ObjectiveFunction(x,f,G,B)
+6: CreatPermutationMatrix(f,o,P )
+7: µ←∆/(n+ m)
+8: CalculateHessian(G,B)
+9: CalculateResiduals(βpµ,f,G)
+10: UpdateIncrements(G)
+˜
+11:
+∆ ←DualityGap( )
+˜
+12:
+βc ←CorrectorMultiplier(∆,
+˜
+∆)
+˜
+13: CalculateResiduals(
+βcµ,f,G)
+14: UpdateIncrements(G)
+15: StepSize(αp,αd)
+16: UpdateVariables(αp,αd)
+17: ∆ ←DualityGap( )
+18: end while
+19: end procedure
+**-------------------------------------**
+**SDP Formulation for Composite Laminates**
+Algorithm 1 optimisation over the Miki cone
+1: µ←¯
+f ▷
+2: x ←0
+3: X ←I, Y ←µI, dX,dY ←0
+4: ∆ ←DualityGap(X,dX,Y ,dY )
+5: while ∆ >tol do
+6: ObjectiveFunction(x,f,g,H)
+7: µ←∆/3
+8: r ←−g
+9: CalculateResiduals(βpµ,r,R)
+10: CalculateHessian(H,X,Y )
+11: dx ←H−1dr
+12: UpdateIncrements(dx,X,dX,Y ,dY ,RZ )
+˜
+13:
+∆ ←DualityGap(X,dX,Y ,dY )
+˜
+14:
+βc ←CorrectorMultiplier(∆,
+˜
+∆)
+15: r ←−g
+˜
+16: CalculateResiduals(
+βcµ,rx,RZ )
+17: dx ←H−1dr
+18: UpdateIncrements(dx,X,dX,Y ,dY ,RZ )
+19: αp ←StepSize(X,dX)
+20: αd ←StepSize(Y ,dY )
+21: x ←x + αpdx
+22: UpdateVariables(αp,αd,X,dX,Y ,dY )
+23: ∆ ←Du
+**-------------------------------------------------**
+Algorithm 2 internal procedures
+1: function DualityGap(X,dX,Y ,dY )
+2: return X + dX· Y + dY
+3: end function
+1: procedure CalculateResiduals(µ,r,RZ ) 2: RZ ←µI−XY−dXdY
+3: r ←rMt
+·Y
+4: dY ←X−1RZ
+5: r ←r + Mt
+·dY
+6: end procedure
+1: procedure UpdateIncrements(dx,X,dX,Y ,dY ,RZ )
+2: dX ←Mdx
+3: dY ←⟨X−1 RZ−dXY ⟩
+4: end procedure
+1: procedure CalculateHessian(H,X,Y )
+2: H ←H + MtX−1
+· MtY
+3: end procedure
+1: function CorrectorMultiplier(∆,
+˜
+∆)
+˜
+min {∆,
+∆}
+2: ρ←
+∆
+3: return max {ρ2,βc}
+4: end function
+1: function StepSize(A,dA)
+2: λ←min{λ|∃a ̸= 0, dA−λA a = 0}
+3: α←max {−λ,1−δ}
+1−δ
+4: return
+α
+5: end function
+1: procedure UpdateVariables(αp,αd,X,dX,Y ,dY )
+2: X ←X + αpdX
+3: dX ←0
+4: Y ←Y + αddY
+5: dY ←0
+6: end procedure
+**----------------------------------------**
+Algorithm 3 internal procedures
+1: function DualityGap( )
+2: gap←0
+3: for ℓ= 1 ...ns do
+4: gap←gap+ Sℓ.DualityGap( )
+5: end for
+6: return gap
+7: end function
+1: procedure CalculateResiduals(µ,v,rv )
+2: ry ←v
+3: for ℓ= 1 ...ns do
+4: rxℓ ←0
+5: Sℓ.CalculateResiduals(µ,xℓ,rxℓ)
+6: for α= 1 ...np do
+7: ryα
+←ryα
++ wαℓxℓ
+8: end for
+9: Bℓ ←Sℓ.Bℓ
+10: for α= 1 ...np do
+11: ryα
+←ryα
+−wαℓB−1
+ℓ rxℓ
+12: end for
+13: end for
+14: rv ←rv−Q−1ry
+15: end procedure
+**----------------------------------------**
+1: procedure UpdateIncrements(dv)
+2: ry ←ry + dv
+3: dy ←Q−1ry
+4: for ℓ= 1 ...ns do
+5: for α= 1 ...np do
+6: rxα
+←rxα + wαℓdyα
+7: end for
+8: dxℓ ←B−1
+ℓ rxℓ
+9: Sℓ.UpdateIncrements(dxℓ)
+10: end for
+11: end procedure
+1: procedure CalculateHessian(H)
+2: Q ←0
+3: for ℓ= 1 ...ns do
+4: Bℓ ←0
+5: Sℓ.CalculateHessian(Bℓ)
+6: for α= 1 ...np do
+7: for β = 1 ...np do
+8: Qαβ ←Qαβ + wαℓwβℓB−1
+ℓ
+9: end for
+10: end for
+11: end for
+12: H ←H + Q−1
+13: end procedure
+1: function StepSize(αp,αd)
+2: S1.StepSize(αp,αd)
+3: for ℓ= 2 ...ns do
+4: Sℓ.StepSize(αpℓ,αdℓ)
+5: αp ←min{αp,αpℓ}
+6: αd ←min{αd,αdℓ}
+7: end for
+8: end function
+1: procedure UpdateVariables(αp,αd,X,dX,Y ,dY )
+2: v ←v + αpdv
+3: for ℓ= 1 ...ns do
+4: Sℓ.UpdateVariables(αp,αd)
+5: end for
+6: end procedure
