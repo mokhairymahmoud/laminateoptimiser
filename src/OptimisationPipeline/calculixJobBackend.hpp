@@ -3,12 +3,31 @@
 #include "jobBackend.hpp"
 
 #include <cstdlib>
+#include <regex>
 
 namespace lamopt {
 
 using CalculixParameterMapping = JobParameterMapping;
 
+enum class CalculixMatchSelection {
+    First,
+    Last
+};
+
+struct CalculixTextScalarRule {
+    std::filesystem::path sourceFilename;
+    std::string pattern;
+    int captureGroup = 1;
+    CalculixMatchSelection matchSelection = CalculixMatchSelection::Last;
+    double scale = 1.0;
+    double offset = 0.0;
+    std::string label;
+};
+
 struct CalculixJobConfig : JobBackendConfig {
+    std::vector<CalculixTextScalarRule> objectiveExtractions;
+    std::vector<CalculixTextScalarRule> constraintExtractions;
+
     CalculixJobConfig() {
         renderedInputFilename = "job.inp";
         resultFilename = "analysis_results.txt";
@@ -30,6 +49,8 @@ struct CalculixJobSetup {
     std::optional<std::filesystem::path> executablePath;
     std::optional<std::filesystem::path> standardOutputFilename = std::filesystem::path("ccx.stdout.log");
     std::optional<std::filesystem::path> standardErrorFilename = std::filesystem::path("ccx.stderr.log");
+    std::vector<CalculixTextScalarRule> objectiveExtractions;
+    std::vector<CalculixTextScalarRule> constraintExtractions;
 };
 
 [[nodiscard]] inline std::filesystem::path ResolveCalculixExecutable(
@@ -75,6 +96,8 @@ struct CalculixJobSetup {
     config.resultFilename = setup.resultFilename;
     config.standardOutputFilename = setup.standardOutputFilename;
     config.standardErrorFilename = setup.standardErrorFilename;
+    config.objectiveExtractions = setup.objectiveExtractions;
+    config.constraintExtractions = setup.constraintExtractions;
     config.launchCommandTemplate =
         ShellQuoteForCommand(ResolveCalculixExecutable(setup.executablePath)) + " -i {job_name}";
     return config;
@@ -83,7 +106,123 @@ struct CalculixJobSetup {
 class CalculixJobBackend : public JobBackend {
 public:
     explicit CalculixJobBackend(CalculixJobConfig config)
-        : JobBackend(std::move(config)) {}
+        : JobBackend(config)
+        , m_config(std::move(config)) {}
+
+protected:
+    AnalysisResult parseSuccessfulRun(const ExecutionPaths& paths,
+                                      const AnalysisDiagnostics& diagnostics) const override {
+        if (m_config.objectiveExtractions.empty() && m_config.constraintExtractions.empty()) {
+            return JobBackend::parseSuccessfulRun(paths, diagnostics);
+        }
+
+        try {
+            const Eigen::VectorXd objectives = extractValues(m_config.objectiveExtractions, paths);
+            const Eigen::VectorXd constraints = extractValues(m_config.constraintExtractions, paths);
+            writeResultFile(
+                paths.resultPath,
+                objectives,
+                constraints,
+                std::nullopt,
+                std::nullopt,
+                std::nullopt,
+                std::string("parsed from CalculiX output files")
+            );
+        } catch (const std::exception& exception) {
+            AnalysisResult result;
+            result.status = AnalysisStatus::InvalidOutput;
+            result.diagnostics = diagnostics;
+            result.diagnostics.message = exception.what();
+            return result;
+        }
+
+        return parseResultFile(paths.resultPath, diagnostics, m_config.backendName);
+    }
+
+private:
+    CalculixJobConfig m_config;
+
+    [[nodiscard]] static Eigen::VectorXd extractValues(const std::vector<CalculixTextScalarRule>& rules,
+                                                       const ExecutionPaths& paths) {
+        Eigen::VectorXd values(rules.size());
+        for (std::size_t index = 0; index < rules.size(); ++index) {
+            values(static_cast<Eigen::Index>(index)) = extractScalar(rules[index], paths);
+        }
+        return values;
+    }
+
+    [[nodiscard]] static double extractScalar(const CalculixTextScalarRule& rule,
+                                              const ExecutionPaths& paths) {
+        const std::filesystem::path sourcePath = resolveSourcePath(rule.sourceFilename, paths);
+        std::ifstream sourceStream(sourcePath);
+        if (!sourceStream) {
+            throw std::runtime_error("CalculiX extraction source file not found: " + sourcePath.string());
+        }
+
+        std::ostringstream buffer;
+        buffer << sourceStream.rdbuf();
+        const std::string content = buffer.str();
+
+        const std::regex expression(rule.pattern);
+        std::sregex_iterator iterator(content.begin(), content.end(), expression);
+        const std::sregex_iterator end;
+
+        if (iterator == end) {
+            throw std::runtime_error("CalculiX extraction pattern did not match for "
+                                     + describeRule(rule, sourcePath) + ".");
+        }
+
+        std::smatch match = *iterator;
+        if (rule.matchSelection == CalculixMatchSelection::Last) {
+            for (; iterator != end; ++iterator) {
+                match = *iterator;
+            }
+        }
+
+        if (rule.captureGroup < 0 || rule.captureGroup >= static_cast<int>(match.size())) {
+            throw std::runtime_error("CalculiX extraction capture group is out of range for "
+                                     + describeRule(rule, sourcePath) + ".");
+        }
+
+        const double rawValue = std::stod(match[rule.captureGroup].str());
+        return rule.scale * rawValue + rule.offset;
+    }
+
+    [[nodiscard]] static std::filesystem::path resolveSourcePath(const std::filesystem::path& sourceFilename,
+                                                                 const ExecutionPaths& paths) {
+        if (sourceFilename.is_absolute()) {
+            return sourceFilename;
+        }
+
+        std::string resolved = sourceFilename.string();
+        replaceToken(resolved, "{job_name}", paths.renderedInputPath.stem().string());
+        replaceToken(resolved, "{run_dir}", paths.runDirectory.string());
+        replaceToken(resolved, "{input_file}", paths.renderedInputPath.string());
+        replaceToken(resolved, "{result_file}", paths.resultPath.string());
+        return paths.runDirectory / resolved;
+    }
+
+    static void replaceToken(std::string& input,
+                             const std::string& needle,
+                             const std::string& replacement) {
+        if (needle.empty()) {
+            return;
+        }
+
+        std::size_t position = 0;
+        while ((position = input.find(needle, position)) != std::string::npos) {
+            input.replace(position, needle.size(), replacement);
+            position += replacement.size();
+        }
+    }
+
+    [[nodiscard]] static std::string describeRule(const CalculixTextScalarRule& rule,
+                                                  const std::filesystem::path& sourcePath) {
+        if (!rule.label.empty()) {
+            return rule.label + " in " + sourcePath.string();
+        }
+        return sourcePath.string();
+    }
 };
 
 }  // namespace lamopt

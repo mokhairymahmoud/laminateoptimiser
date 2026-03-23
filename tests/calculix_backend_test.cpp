@@ -179,6 +179,42 @@ TEST(CalculixBackendTest, BackendRunsInsideRunDirectoryAndCapturesLogs) {
     EXPECT_NE(stderrBuffer.str().find("missing.stderr.probe"), std::string::npos);
 }
 
+TEST(CalculixBackendTest, BackendCanExtractResponsesFromCalculixTextOutput) {
+    const std::filesystem::path tempDirectory = TempPath("calculix_text_extract");
+    const std::filesystem::path templatePath = WriteTemplate(tempDirectory);
+    const std::filesystem::path fixturePath =
+        std::filesystem::path(__FILE__).parent_path() / "fixtures/calculix/results_sample.dat";
+
+    lamopt::CalculixJobConfig config;
+    config.templateInputPath = templatePath;
+    config.launchCommandTemplate = "cp " + fixturePath.string() + " {job_name}.dat";
+    config.parameterMappings = {{"{{X0}}", 0}, {"{{X1}}", 1}};
+    config.scratchRoot = tempDirectory;
+    config.objectiveExtractions = {
+        {std::filesystem::path("{job_name}.dat"), "TOTAL MASS\\s*=\\s*([-+0-9.Ee]+)", 1, lamopt::CalculixMatchSelection::Last, 1.0, 0.0, "mass"}
+    };
+    config.constraintExtractions = {
+        {std::filesystem::path("{job_name}.dat"), "FAILURE INDEX\\s*=\\s*([-+0-9.Ee]+)", 1, lamopt::CalculixMatchSelection::Last, 1.0, -1.0, "failure_margin"},
+        {std::filesystem::path("{job_name}.dat"), "TIP DISPLACEMENT\\s*=\\s*([-+0-9.Ee]+)", 1, lamopt::CalculixMatchSelection::Last, 1000.0, 0.0, "tip_displacement_mm"}
+    };
+
+    lamopt::CalculixJobBackend backend(config);
+
+    lamopt::AnalysisRequest request;
+    request.designVariables = Eigen::Vector2d(1.0, 2.0);
+
+    const lamopt::AnalysisResult result = backend.evaluate(request);
+
+    ASSERT_TRUE(result.isSuccessful());
+    ASSERT_EQ(result.objectives.size(), 1);
+    ASSERT_EQ(result.constraints.size(), 2);
+    EXPECT_NEAR(result.objectives(0), 12.75, 1.0e-12);
+    EXPECT_NEAR(result.constraints(0), -0.08, 1.0e-12);
+    EXPECT_NEAR(result.constraints(1), 3.1, 1.0e-12);
+    EXPECT_EQ(result.diagnostics.message, "parsed from CalculiX output files");
+    EXPECT_TRUE(std::filesystem::exists(tempDirectory / "calculix_job" / "analysis_results.txt"));
+}
+
 TEST(CalculixBackendTest, BackendReportsCommandFailure) {
     const std::filesystem::path tempDirectory = TempPath("calculix_failure");
     const std::filesystem::path templatePath = WriteTemplate(tempDirectory);

@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <optional>
+#include <ostream>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -68,21 +69,22 @@ public:
         }
         std::filesystem::create_directories(runDirectory);
 
-        const std::filesystem::path renderedInputPath = runDirectory / m_config.renderedInputFilename;
-        const std::filesystem::path resultPath = runDirectory / m_config.resultFilename;
-        const std::optional<std::filesystem::path> standardOutputPath =
+        const ExecutionPaths paths{
+            runDirectory,
+            runDirectory / m_config.renderedInputFilename,
+            runDirectory / m_config.resultFilename,
             m_config.standardOutputFilename.has_value()
             ? std::optional<std::filesystem::path>(runDirectory / *m_config.standardOutputFilename)
-            : std::nullopt;
-        const std::optional<std::filesystem::path> standardErrorPath =
+            : std::nullopt,
             m_config.standardErrorFilename.has_value()
             ? std::optional<std::filesystem::path>(runDirectory / *m_config.standardErrorFilename)
-            : std::nullopt;
-        result.diagnostics.standardOutputPath = standardOutputPath.value_or(std::filesystem::path());
-        result.diagnostics.standardErrorPath = standardErrorPath.value_or(std::filesystem::path());
+            : std::nullopt
+        };
+        result.diagnostics.standardOutputPath = paths.standardOutputPath.value_or(std::filesystem::path());
+        result.diagnostics.standardErrorPath = paths.standardErrorPath.value_or(std::filesystem::path());
 
         try {
-            renderTemplate(request.designVariables, renderedInputPath);
+            renderTemplate(request.designVariables, paths.renderedInputPath);
         } catch (const std::exception& exception) {
             result.status = AnalysisStatus::InvalidOutput;
             result.diagnostics.runDirectory = runDirectory;
@@ -92,7 +94,7 @@ public:
 
         int attempts = 0;
         for (; attempts <= m_config.maxRetries; ++attempts) {
-            const std::string command = fillCommandTemplate(renderedInputPath, runDirectory, resultPath);
+            const std::string command = fillCommandTemplate(paths.renderedInputPath, runDirectory, paths.resultPath);
             result.diagnostics.command = command;
             result.diagnostics.runDirectory = runDirectory;
 
@@ -101,14 +103,14 @@ public:
                 m_config.timeout,
                 backendName(),
                 m_config.launchInRunDirectory ? runDirectory : std::filesystem::path(),
-                standardOutputPath,
-                standardErrorPath
+                paths.standardOutputPath,
+                paths.standardErrorPath
             );
             result.diagnostics.exitCode = commandExecution.exitCode;
             result.diagnostics.attempts = attempts + 1;
 
             if (commandExecution.status == AnalysisStatus::Success) {
-                return parseResultFile(resultPath, result.diagnostics, backendName());
+                return parseSuccessfulRun(paths, result.diagnostics);
             }
 
             if (commandExecution.status == AnalysisStatus::Timeout) {
@@ -122,6 +124,101 @@ public:
         }
 
         return result;
+    }
+
+protected:
+    struct ExecutionPaths {
+        std::filesystem::path runDirectory;
+        std::filesystem::path renderedInputPath;
+        std::filesystem::path resultPath;
+        std::optional<std::filesystem::path> standardOutputPath;
+        std::optional<std::filesystem::path> standardErrorPath;
+    };
+
+    [[nodiscard]] const JobBackendConfig& config() const {
+        return m_config;
+    }
+
+    [[nodiscard]] virtual AnalysisResult parseSuccessfulRun(const ExecutionPaths& paths,
+                                                            const AnalysisDiagnostics& diagnostics) const {
+        return parseResultFile(paths.resultPath, diagnostics, backendName());
+    }
+
+    [[nodiscard]] static AnalysisResult parseResultFile(const std::filesystem::path& resultPath,
+                                                        const AnalysisDiagnostics& diagnostics,
+                                                        const std::string& backendName) {
+        AnalysisResult result;
+        result.diagnostics = diagnostics;
+
+        std::ifstream resultStream(resultPath);
+        if (!resultStream) {
+            result.status = AnalysisStatus::InvalidOutput;
+            result.diagnostics.message = backendName + " result file not found: " + resultPath.string();
+            return result;
+        }
+
+        std::unordered_map<std::string, std::string> fields;
+        std::string line;
+        while (std::getline(resultStream, line)) {
+            const std::size_t separator = line.find('=');
+            if (separator == std::string::npos) {
+                continue;
+            }
+            fields[line.substr(0, separator)] = line.substr(separator + 1);
+        }
+
+        if (fields.count("objectives") == 0 || fields.count("constraints") == 0) {
+            result.status = AnalysisStatus::InvalidOutput;
+            result.diagnostics.message = backendName
+                + " result file is missing objectives or constraints.";
+            return result;
+        }
+
+        result.objectives = parseVector(fields["objectives"]);
+        result.constraints = parseVector(fields["constraints"]);
+        if (fields.count("objective_gradients") != 0) {
+            result.objectiveGradients = parseMatrix(fields["objective_gradients"]);
+        }
+        if (fields.count("constraint_gradients") != 0) {
+            result.constraintGradients = parseMatrix(fields["constraint_gradients"]);
+        }
+        if (fields.count("objective_curvature") != 0) {
+            result.objectiveCurvature = parseMatrix(fields["objective_curvature"]);
+        }
+
+        result.status = AnalysisStatus::Success;
+        if (fields.count("message") != 0) {
+            result.diagnostics.message = fields["message"];
+        }
+        return result;
+    }
+
+    static void writeResultFile(const std::filesystem::path& resultPath,
+                                const Eigen::VectorXd& objectives,
+                                const Eigen::VectorXd& constraints,
+                                const std::optional<Eigen::MatrixXd>& objectiveGradients = std::nullopt,
+                                const std::optional<Eigen::MatrixXd>& constraintGradients = std::nullopt,
+                                const std::optional<Eigen::MatrixXd>& objectiveCurvature = std::nullopt,
+                                const std::optional<std::string>& message = std::nullopt) {
+        std::ofstream resultStream(resultPath);
+        if (!resultStream) {
+            throw std::runtime_error("Unable to write job result file: " + resultPath.string());
+        }
+
+        resultStream << "objectives=" << formatVector(objectives) << '\n';
+        resultStream << "constraints=" << formatVector(constraints) << '\n';
+        if (objectiveGradients.has_value()) {
+            resultStream << "objective_gradients=" << formatMatrix(*objectiveGradients) << '\n';
+        }
+        if (constraintGradients.has_value()) {
+            resultStream << "constraint_gradients=" << formatMatrix(*constraintGradients) << '\n';
+        }
+        if (objectiveCurvature.has_value()) {
+            resultStream << "objective_curvature=" << formatMatrix(*objectiveCurvature) << '\n';
+        }
+        if (message.has_value()) {
+            resultStream << "message=" << *message << '\n';
+        }
     }
 
 private:
@@ -213,55 +310,6 @@ private:
         return quoted;
     }
 
-    [[nodiscard]] static AnalysisResult parseResultFile(const std::filesystem::path& resultPath,
-                                                        const AnalysisDiagnostics& diagnostics,
-                                                        const std::string& backendName) {
-        AnalysisResult result;
-        result.diagnostics = diagnostics;
-
-        std::ifstream resultStream(resultPath);
-        if (!resultStream) {
-            result.status = AnalysisStatus::InvalidOutput;
-            result.diagnostics.message = backendName + " result file not found: " + resultPath.string();
-            return result;
-        }
-
-        std::unordered_map<std::string, std::string> fields;
-        std::string line;
-        while (std::getline(resultStream, line)) {
-            const std::size_t separator = line.find('=');
-            if (separator == std::string::npos) {
-                continue;
-            }
-            fields[line.substr(0, separator)] = line.substr(separator + 1);
-        }
-
-        if (fields.count("objectives") == 0 || fields.count("constraints") == 0) {
-            result.status = AnalysisStatus::InvalidOutput;
-            result.diagnostics.message = backendName
-                + " result file is missing objectives or constraints.";
-            return result;
-        }
-
-        result.objectives = parseVector(fields["objectives"]);
-        result.constraints = parseVector(fields["constraints"]);
-        if (fields.count("objective_gradients") != 0) {
-            result.objectiveGradients = parseMatrix(fields["objective_gradients"]);
-        }
-        if (fields.count("constraint_gradients") != 0) {
-            result.constraintGradients = parseMatrix(fields["constraint_gradients"]);
-        }
-        if (fields.count("objective_curvature") != 0) {
-            result.objectiveCurvature = parseMatrix(fields["objective_curvature"]);
-        }
-
-        result.status = AnalysisStatus::Success;
-        if (fields.count("message") != 0) {
-            result.diagnostics.message = fields["message"];
-        }
-        return result;
-    }
-
     [[nodiscard]] static Eigen::VectorXd parseVector(const std::string& value) {
         std::vector<double> entries;
         std::stringstream stream(value);
@@ -298,6 +346,28 @@ private:
             matrix.col(static_cast<Eigen::Index>(column)) = rows[column];
         }
         return matrix;
+    }
+
+    [[nodiscard]] static std::string formatVector(const Eigen::VectorXd& value) {
+        std::ostringstream stream;
+        for (Eigen::Index index = 0; index < value.size(); ++index) {
+            if (index != 0) {
+                stream << ",";
+            }
+            stream << formatDouble(value(index));
+        }
+        return stream.str();
+    }
+
+    [[nodiscard]] static std::string formatMatrix(const Eigen::MatrixXd& value) {
+        std::ostringstream stream;
+        for (Eigen::Index column = 0; column < value.cols(); ++column) {
+            if (column != 0) {
+                stream << ";";
+            }
+            stream << formatVector(value.col(column));
+        }
+        return stream.str();
     }
 
     [[nodiscard]] static CommandExecution runCommand(const std::string& command,

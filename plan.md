@@ -115,7 +115,9 @@ Status legend:
   - command failure
   - timeout handling
 - `[ ]` Implement project-specific CalculiX deck generation and real result extraction for the actual FE models used by this project.
-- `[ ]` Add CalculiX result extraction for the objective and constraint quantities needed by the active approximation pipeline.
+- `[~]` Add CalculiX result extraction for the objective and constraint quantities needed by the active approximation pipeline.
+  - current status: `CalculixJobBackend` can now extract ordered objective and constraint scalars from CalculiX text outputs using configured regex rules and emit the normal backend result contract
+  - remaining work: replace fixture-driven extraction rules with the actual project response definitions and solver output files used by this laminate workflow
 - `[ ]` Add a materialized launch path for local CalculiX runs on developer machines:
   - discover or configure the `ccx` executable
   - set job naming and working-directory conventions
