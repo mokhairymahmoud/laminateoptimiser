@@ -1,4 +1,5 @@
 #include "../src/OptimisationPipeline/calculixJobBackend.hpp"
+#include "../src/OptimisationPipeline/calculixBenchmarkSchemas.hpp"
 #include "../src/OptimisationPipeline/defaultAnalysisBackend.hpp"
 
 #include <gtest/gtest.h>
@@ -332,6 +333,38 @@ TEST(CalculixBackendTest, BackendCanAssembleResponsesFromNamedCalculixSchema) {
     EXPECT_NEAR(result.constraints(0), 1.0 / 0.92 - 1.0, 1.0e-12);
     EXPECT_NEAR(result.constraints(1), 3.1 / 3.0 - 1.0, 1.0e-12);
     EXPECT_EQ(result.diagnostics.message, "parsed from CalculiX response schema");
+}
+
+TEST(CalculixBackendTest, BenchmarkSchemaHelperBuildsBucklingResponses) {
+    const std::filesystem::path tempDirectory = TempPath("calculix_benchmark_schema_helper");
+    const std::filesystem::path templatePath = WriteTemplate(tempDirectory);
+    const std::filesystem::path fixturePath =
+        std::filesystem::path(__FILE__).parent_path() / "fixtures/calculix/results_buckling_schema.dat";
+
+    lamopt::CalculixJobConfig config;
+    config.templateInputPath = templatePath;
+    config.launchCommandTemplate = "cp " + fixturePath.string() + " {job_name}.dat";
+    config.parameterMappings = {{"{{X0}}", 0}, {"{{X1}}", 1}};
+    config.scratchRoot = tempDirectory;
+
+    lamopt::ConfigureCalculixPlateBucklingBenchmarkResponses(
+        config,
+        {.tipDisplacementLimit = 3.5, .displacementScale = 1000.0}
+    );
+
+    lamopt::CalculixJobBackend backend(config);
+
+    lamopt::AnalysisRequest request;
+    request.designVariables = Eigen::Vector2d(1.0, 2.0);
+
+    const lamopt::AnalysisResult result = backend.evaluate(request);
+
+    ASSERT_TRUE(result.isSuccessful());
+    ASSERT_EQ(result.objectives.size(), 1);
+    ASSERT_EQ(result.constraints.size(), 2);
+    EXPECT_NEAR(result.objectives(0), 12.75, 1.0e-12);
+    EXPECT_NEAR(result.constraints(0), 1.0 / 1.8 - 1.0, 1.0e-12);
+    EXPECT_NEAR(result.constraints(1), 3.1 / 3.5 - 1.0, 1.0e-12);
 }
 
 TEST(CalculixBackendTest, BackendReportsCommandFailure) {
