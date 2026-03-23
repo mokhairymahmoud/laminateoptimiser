@@ -14,6 +14,7 @@
 #include <vector>
 #include "../GlobalOptimiser/approxFunction.hpp"
 #include "../SDPA/parameter.hpp"
+#include "../Section/section.hpp"
 
 using namespace std;
 using namespace Eigen;
@@ -74,6 +75,8 @@ private:
 	ScalarType reduced_ddual_scalar_;
 	bool verbose_ = true;
 	int lastIterationCount_ = 0;
+	std::vector<optsection::section<ScalarType> *> sectionObjects_;
+	std::vector<int> sectionOffsets_;
 
 
 private:
@@ -166,6 +169,11 @@ public:
 		nRespReduced = nResp-1;
 		permutationMatrix_.resize(nResp);
 	}
+	void setSections(const std::vector<optsection::section<ScalarType> *>& sections,
+	                 const std::vector<int>& offsets) {
+		sectionObjects_ = sections;
+		sectionOffsets_ = offsets;
+	}
 
 	~responseInterface() {
 	}
@@ -185,6 +193,7 @@ public:
 		// change this once we add lamination
 		for (iVar=0;iVar<nVar;iVar++)
 			sideObject[iVar].Initialise(dual_scale,var(iVar));
+		initialiseSections(dual_scale, var);
 
 		approximationObject->Eval(var, slack_);
 		dimObjSet = approximationObject->getBooleanVector(booleanVector);
@@ -216,6 +225,7 @@ public:
 	// change this once we add lamination
 		for (iVar=0;iVar<nVar;iVar++)
 			sideObject[iVar].Hessian(primal_hessian(iVar,iVar));
+		accumulateSectionHessian(primal_hessian);
 	// end change
 
 		cholesky__primal_hessian_ =  primal_hessian.llt();
@@ -259,6 +269,7 @@ public:
 	// change this once we add lamination
 		for (iVar=0;iVar<nVar;iVar++)
 			sideObject[iVar].CalculateResiduals(dprimal_(iVar),penalty);
+		accumulateSectionResiduals(primal_, dprimal_, penalty);
 	// end change
 
 		primal_residual_temp = dprimal_;
@@ -296,6 +307,7 @@ public:
 	// change this once we add lamination
 		for (iVar=0;iVar<nVar;iVar++)
 			sideObject[iVar].UpdateIncrements(dprimal_(iVar));
+		updateSectionIncrements(dprimal_);
 	// end change
 		dslack_ = dslack_-slack_.cwiseProduct(ddual_);
 		dslack_ = dslack_.cwiseProduct(dual_.cwiseInverse());
@@ -308,6 +320,7 @@ public:
 	// change this once we add lamination
 		for (iVar=0;iVar<nVar;iVar++)
 			temp += sideObject[iVar].DualityGap();
+		temp += sectionDualityGap();
 	// end change
 		return temp;
 	}
@@ -321,6 +334,7 @@ public:
 		primal_step = primal_step < step? primal_step: step;
 		for (iVar=0;iVar<nVar;iVar++)
 			sideObject[iVar].StepSize(primal_step,dual_step);
+		stepSection(primal_step, dual_step);
 	// end replace
 		eval = FindStep(slack_,dslack_);
 		step = SDPA::Parameter<ScalarType>::Step_Size_Control(eval);
@@ -342,6 +356,7 @@ public:
 	// change this once we add lamination
 		for (iVar=0;iVar<nVar;iVar++)
 			sideObject[iVar].UpdateVariables(primal_step,dual_step);
+		updateSectionVariables(primal_step, dual_step);
 	// end change
 
 		objective_dprimal_ = 0;
@@ -406,6 +421,65 @@ public:
 			std::cout<<std::endl;
 		}
 		var = primal_;
+	}
+
+private:
+	void initialiseSections(const ScalarType dual_scale, const Vector_v &var) {
+		for (size_t iSection = 0; iSection < sectionObjects_.size(); ++iSection) {
+			optsection::section<ScalarType> *section = sectionObjects_[iSection];
+			const int offset = sectionOffsets_[iSection];
+			const int size = section->getSize();
+			Eigen::Matrix<ScalarType, Dynamic, 1> sectionVar = var.segment(offset, size);
+			section->Initialise(dual_scale, sectionVar);
+		}
+	}
+	void accumulateSectionHessian(Hessian_t &primal_hessian) {
+		for (size_t iSection = 0; iSection < sectionObjects_.size(); ++iSection) {
+			optsection::section<ScalarType> *section = sectionObjects_[iSection];
+			const int offset = sectionOffsets_[iSection];
+			const int size = section->getSize();
+			Eigen::Matrix<ScalarType, Dynamic, Dynamic> sectionHessian =
+				primal_hessian.block(offset, offset, size, size);
+			section->HessianEval(sectionHessian);
+			primal_hessian.block(offset, offset, size, size) = sectionHessian;
+		}
+	}
+	void accumulateSectionResiduals(const Vector_v &var, Vector_v &residual, const ScalarType penalty) {
+		for (size_t iSection = 0; iSection < sectionObjects_.size(); ++iSection) {
+			optsection::section<ScalarType> *section = sectionObjects_[iSection];
+			const int offset = sectionOffsets_[iSection];
+			const int size = section->getSize();
+			Eigen::Matrix<ScalarType, Dynamic, 1> sectionVar = var.segment(offset, size);
+			Eigen::Matrix<ScalarType, Dynamic, 1> sectionResidual = residual.segment(offset, size);
+			section->CalculateResiduals(sectionVar, sectionResidual, penalty);
+			residual.segment(offset, size) = sectionResidual;
+		}
+	}
+	void updateSectionIncrements(const Vector_v &dvar) {
+		for (size_t iSection = 0; iSection < sectionObjects_.size(); ++iSection) {
+			optsection::section<ScalarType> *section = sectionObjects_[iSection];
+			const int offset = sectionOffsets_[iSection];
+			const int size = section->getSize();
+			Eigen::Matrix<ScalarType, Dynamic, 1> sectionIncrement = dvar.segment(offset, size);
+			section->UpdateIncrements(sectionIncrement);
+		}
+	}
+	ScalarType sectionDualityGap() const {
+		ScalarType total = (ScalarType)0.0;
+		for (size_t iSection = 0; iSection < sectionObjects_.size(); ++iSection) {
+			total += sectionObjects_[iSection]->DualityGap();
+		}
+		return total;
+	}
+	void stepSection(ScalarType &primal_step, ScalarType &dual_step) const {
+		for (size_t iSection = 0; iSection < sectionObjects_.size(); ++iSection) {
+			sectionObjects_[iSection]->StepSize(primal_step, dual_step);
+		}
+	}
+	void updateSectionVariables(const ScalarType primal_step, const ScalarType dual_step) {
+		for (size_t iSection = 0; iSection < sectionObjects_.size(); ++iSection) {
+			sectionObjects_[iSection]->UpdateVariables(primal_step, dual_step);
+		}
 	}
 };
 

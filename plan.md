@@ -59,15 +59,19 @@ Status legend:
 - `[x]` Standardize optimiser-side laminate state in the new pipeline request model.
 - `[ ]` Make the lamination-parameter mapping and derivative path explicit on our side of the architecture rather than relying on Abaqus-native gradients.
 - `[~]` Make laminate sections first-class side constraints in the new subproblem solver path.
-  - current status: `LaminateAwareSubproblemSolver` can project laminate section blocks using legacy laminate feasibility and thickness bounds after an inner subproblem solve
-  - remaining work: integrate the same section constraints directly into the legacy min-max production solve path instead of repairing candidates afterward
+  - current status: `LegacyLaminateSection1RespSubproblemSolver` now wires `laminateSection` directly into the legacy response-interface solve loop for the single-section / single-objective path
+  - current status: `LaminateAwareSubproblemSolver` still exists as a post-solve repair layer for cases the direct adapter does not yet cover
+  - remaining work: generalize the direct section-aware solve path beyond the current narrow laminate case and retire repair-only usage where possible
 - `[~]` Integrate `laminateSection` ownership cleanly into the new orchestration layer.
   - current status: `LaminateSectionState` now carries section offsets and thickness bounds and is propagated from `AnalysisRequest` into `ApproximationProblem`
-  - remaining work: replace the current wrapper-style ownership with direct section-aware subproblem assembly
-- `[ ]` Assemble approximate subproblems that simultaneously include:
+  - current status: the legacy response interface can now carry full `optsection::section` objects with offsets in addition to scalar side constraints
+  - remaining work: factor section construction and binding out of adapter-specific code and support multiple section blocks cleanly
+- `[~]` Assemble approximate subproblems that simultaneously include:
   - response constraints
   - laminate feasibility constraints
   - bound constraints
+  - current status: the direct laminate adapter now handles objective approximation + laminate feasibility + scalar lower bounds in one solve
+  - remaining work: add response-constraint support to the same direct laminate solve path
 - `[x]` Validate the new pipeline using laminate-aware subproblem solves rather than only standalone laminate regressions.
   - current status: `global_driver_test` now covers laminate-aware projection and an end-to-end driver path with laminate section data
 
@@ -108,21 +112,21 @@ Status legend:
 - `[x]` Abaqus backend skeleton exists and is tested.
 - `[x]` Full test suite currently passes.
 - `[~]` The project now has a working bridge from the new pipeline into the legacy min-max solver, but only for the benchmark-shaped path and without laminate section side constraints.
-- `[~]` Laminate section data now flows through the new pipeline and a laminate-aware wrapper is tested, but laminate feasibility is still enforced as post-solve projection rather than inside the production legacy min-max solve.
+- `[~]` Laminate section data now flows through the new pipeline, and there is both a tested wrapper-based repair path and a direct legacy laminate adapter for the narrow single-section / single-objective case.
 - `[~]` The architecture now allows Abaqus-native gradients to be optional, but the production lamination-parameter sensitivity path still needs to be implemented explicitly on our side.
 
 ## Next Implementation Step
 
 The next implementation step is:
 
-- `[ ]` Move laminate feasibility from the post-solve wrapper into the legacy solver-backed subproblem assembly.
+- `[ ]` Generalize the direct legacy laminate adapter beyond the current narrow single-section / single-objective path.
 
 Concretely, that means:
 
-- generalize the current benchmark-specific legacy adapter beyond the `2`-variable / `4`-response benchmark shape
-- pass laminate section definitions from `AnalysisRequest` / `ApproximationProblem` into the legacy subproblem backend
-- solve approximate problems that include, during the solve rather than after projection:
+- support approximate response constraints in the same direct laminate solve path, not only a single objective
+- support more than one laminate section block and non-zero section offsets
+- reuse section-aware legacy solves for approximate problems that include, during the solve rather than after projection:
   - response approximations
   - thickness bounds
   - lamination-parameter feasibility constraints
-- add an integration test that exercises the legacy solver path together with laminate-aware constraints, not only the wrapper-only path
+- keep the wrapper path only as a fallback for unsupported shapes, not as the primary laminate integration route

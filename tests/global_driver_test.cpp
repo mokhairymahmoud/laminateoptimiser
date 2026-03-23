@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <filesystem>
 
 namespace {
@@ -350,6 +351,91 @@ TEST(GlobalDriverTest, DriverCanRunWithLaminateAwareSubproblemWrapper) {
     EXPECT_LT(result.design(4), 2.0);
     EXPECT_GT(result.design(4), 0.5);
     EXPECT_GT(result.design(4), 1.5);
+    EXPECT_LT(result.analysis.objectives(0), -1.5);
+}
+
+TEST(GlobalDriverTest, LegacyLaminateAdapterSolvesSectionConstrainedObjective) {
+    lamopt::LegacyLaminateSection1RespSubproblemSolver subproblemSolver;
+
+    lamopt::ApproximationProblem problem;
+    problem.referenceDesign = Eigen::VectorXd::Zero(5);
+    problem.referenceDesign(4) = 1.0;
+    problem.objectiveValues = Eigen::VectorXd::Constant(1, -1.0);
+    problem.constraintValues = Eigen::VectorXd();
+    problem.objectiveGradients = Eigen::MatrixXd::Zero(5, 1);
+    (*problem.objectiveGradients)(4, 0) = -1.0;
+    problem.responseDampingFactors = Eigen::VectorXd::Ones(1);
+    problem.designDampingVector = Eigen::VectorXd::Ones(5);
+
+    lamopt::LaminateSectionState laminateSection;
+    laminateSection.variableOffset = 0;
+    laminateSection.isBalanced = true;
+    laminateSection.isSymmetric = true;
+    laminateSection.sublaminateCount = 6;
+    laminateSection.thicknessLowerBound = 0.5;
+    laminateSection.thicknessUpperBound = 2.0;
+    laminateSection.thickness = 1.0;
+    laminateSection.laminationParameters = Eigen::VectorXd::Zero(4);
+    problem.laminateSections.push_back(laminateSection);
+
+    const lamopt::SubproblemResult result = subproblemSolver.solve(problem);
+
+    ASSERT_TRUE(result.success);
+    EXPECT_TRUE(result.candidateDesign.allFinite());
+    EXPECT_GT(result.candidateDesign(4), 1.2);
+    EXPECT_LT(result.candidateDesign(4), 2.0);
+    EXPECT_LT(result.predictedObjectives(0), -1.2);
+}
+
+TEST(GlobalDriverTest, DriverImprovesWithLegacyLaminateSectionAdapter) {
+    class ThicknessBackend final : public lamopt::AnalysisBackend {
+    public:
+        lamopt::AnalysisResult evaluate(const lamopt::AnalysisRequest& request) override {
+            lamopt::AnalysisResult result;
+            result.status = lamopt::AnalysisStatus::Success;
+            result.objectives = Eigen::VectorXd::Constant(1, -request.designVariables(4));
+            result.constraints = Eigen::VectorXd();
+            result.objectiveGradients = Eigen::MatrixXd::Zero(request.designVariables.size(), 1);
+            (*result.objectiveGradients)(4, 0) = -1.0;
+            return result;
+        }
+    } backend;
+
+    lamopt::LinearApproximationBuilder approximationBuilder;
+    lamopt::LegacyLaminateSection1RespSubproblemSolver subproblemSolver;
+
+    lamopt::DriverOptions options;
+    options.maxOuterIterations = 12;
+    options.maxSubIterations = 4;
+    options.requestSensitivities = true;
+    options.stagnationTolerance = 1.0e-6;
+
+    lamopt::GlobalOptimisationDriver driver(backend, approximationBuilder, subproblemSolver, options);
+
+    lamopt::AnalysisRequest request;
+    request.designVariables = Eigen::VectorXd::Zero(5);
+    request.designVariables(4) = 1.0;
+    request.workDirectory = TempPath("driver_legacy_laminate_adapter");
+
+    lamopt::LaminateSectionState laminateSection;
+    laminateSection.variableOffset = 0;
+    laminateSection.isBalanced = true;
+    laminateSection.isSymmetric = true;
+    laminateSection.sublaminateCount = 6;
+    laminateSection.thicknessLowerBound = 0.5;
+    laminateSection.thicknessUpperBound = 2.0;
+    laminateSection.thickness = 1.0;
+    laminateSection.laminationParameters = Eigen::VectorXd::Zero(4);
+    request.laminateSections.push_back(laminateSection);
+
+    const lamopt::GlobalOptimisationResult result = driver.optimise(request);
+
+    EXPECT_FALSE(result.history.empty());
+    EXPECT_TRUE(std::any_of(result.history.begin(),
+                            result.history.end(),
+                            [](const lamopt::IterationRecord& record) { return record.accepted; }));
+    EXPECT_GT(result.design(4), 1.5);
+    EXPECT_LT(result.design(4), 2.0);
     EXPECT_LT(result.analysis.objectives(0), -1.5);
 }
 

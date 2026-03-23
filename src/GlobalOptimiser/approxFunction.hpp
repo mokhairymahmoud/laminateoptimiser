@@ -123,11 +123,10 @@ public:
 		dimObjSet = objectiveCount;
 	}
 	void Eval(Vector_v primalVar, Vector_r dualVar, Vector_r &responses, Matrix_t &gradient, Hessian_t &hessian){
-		Vector_v gradLinear, gradReciprocal, gradTemp, primalVarInv;
+		Vector_v gradLinear, gradReciprocal, gradTemp;
 		int iResp;
 
 		responses = free_terms;
-		primalVarInv = primalVar.cwiseInverse();
 		for (iResp=0;iResp<nResp;iResp++){
 			//ConLin
 			// resp = free_terms + gradLin*x + gradRecip /x
@@ -139,21 +138,23 @@ public:
 
 			// Reciprocal part
 			gradReciprocal = sensitivitiesReciprocal.col(iResp);
-			gradTemp = gradReciprocal.cwiseProduct(primalVarInv);
-			responses(iResp) += gradTemp.sum();
-			gradTemp = gradTemp.cwiseProduct(primalVarInv);
-			gradient.col(iResp) -= gradTemp;
-			gradTemp = 2*gradTemp.cwiseProduct(primalVarInv);
-			hessian.diagonal() +=  gradTemp*dualVar(iResp);
+			if (!gradReciprocal.isZero((ScalarType)0.0)) {
+				const Vector_v primalVarInv = primalVar.cwiseInverse();
+				gradTemp = gradReciprocal.cwiseProduct(primalVarInv);
+				responses(iResp) += gradTemp.sum();
+				gradTemp = gradTemp.cwiseProduct(primalVarInv);
+				gradient.col(iResp) -= gradTemp;
+				gradTemp = 2*gradTemp.cwiseProduct(primalVarInv);
+				hessian.diagonal() +=  gradTemp*dualVar(iResp);
+			}
 
 		}
 	};
 	void Eval(Vector_v primalVar, Vector_r &responses){
-		Vector_v gradLinear, gradReciprocal, gradTemp, primalVarInv;
+		Vector_v gradLinear, gradReciprocal, gradTemp;
 		int iResp;
 
 		responses = free_terms;
-		primalVarInv = primalVar.cwiseInverse();
 		for (iResp=0;iResp<nResp;iResp++){
 			//ConLin
 			// resp = free_terms + gradLin*x + gradRecip /x
@@ -164,8 +165,11 @@ public:
 
 			// Reciprocal part
 			gradReciprocal = sensitivitiesReciprocal.col(iResp);
-			gradTemp = gradReciprocal.cwiseProduct(primalVarInv);
-			responses(iResp) += gradTemp.sum();
+			if (!gradReciprocal.isZero((ScalarType)0.0)) {
+				const Vector_v primalVarInv = primalVar.cwiseInverse();
+				gradTemp = gradReciprocal.cwiseProduct(primalVarInv);
+				responses(iResp) += gradTemp.sum();
+			}
 		}
 	}
 	void InitialiseProblem1(Vector_v primalVar){
