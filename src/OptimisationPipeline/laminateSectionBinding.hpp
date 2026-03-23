@@ -6,6 +6,8 @@
 
 #include <memory>
 #include <string>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace lamopt {
@@ -25,73 +27,107 @@ struct LaminateSectionBuildResult {
 namespace detail {
 
 template<bool IsBalanced, bool IsSymmetric, int NSUBLAM>
-LaminateSectionBuildResult MakeLaminateSectionBinding(const LaminateSectionState& sectionState) {
-    using Section =
-        lampar::laminateSection<lampar::SingleMaterial, IsBalanced, IsSymmetric, NSUBLAM, double>;
+using ConcreteLaminateSection =
+    lampar::laminateSection<lampar::SingleMaterial, IsBalanced, IsSymmetric, NSUBLAM, double>;
 
-    LaminateSectionBuildResult result;
-    if (sectionState.laminationParameters.size() != 0
-        && sectionState.laminationParameters.size() != Section::Size - 1) {
-        result.message = "Laminate section lamination-parameter size does not match the selected section type.";
+struct LaminateSectionBindingVisitor {
+    using Result = LaminateSectionBuildResult;
+
+    template<typename Section>
+    Result operator()(const LaminateSectionState& state) const {
+        Result result;
+        if (state.laminationParameters.size() != 0
+            && state.laminationParameters.size() != Section::Size - 1) {
+            result.message =
+                "Laminate section lamination-parameter size does not match the selected section type.";
+            return result;
+        }
+
+        auto section = std::make_unique<Section>();
+        section->setBoundThickness(state.thicknessLowerBound, state.thicknessUpperBound);
+
+        result.success = true;
+        result.binding.section = std::move(section);
+        result.binding.offset = state.variableOffset;
+        result.binding.size = Section::Size;
         return result;
     }
+};
 
-    auto section = std::make_unique<Section>();
-    section->setBoundThickness(sectionState.thicknessLowerBound, sectionState.thicknessUpperBound);
-
-    result.success = true;
-    result.binding.section = std::move(section);
-    result.binding.offset = sectionState.variableOffset;
-    result.binding.size = Section::Size;
+template<typename Result>
+Result UnsupportedLaminateSectionDispatch(const LaminateSectionState& sectionState) {
+    Result result;
+    result.message = "Unsupported laminate section sublaminate count: "
+                   + std::to_string(sectionState.sublaminateCount);
     return result;
 }
 
-template<bool IsBalanced, bool IsSymmetric>
-LaminateSectionBuildResult DispatchLaminateSectionBinding(const LaminateSectionState& sectionState) {
+template<bool IsBalanced, bool IsSymmetric, typename Visitor>
+typename std::decay_t<Visitor>::Result DispatchLaminateSectionTypeByCount(
+    const LaminateSectionState& sectionState,
+    Visitor&& visitor) {
+    using Result = typename std::decay_t<Visitor>::Result;
+
     switch (sectionState.sublaminateCount) {
         case 1:
-            return MakeLaminateSectionBinding<IsBalanced, IsSymmetric, 1>(sectionState);
+            return visitor.template operator()<ConcreteLaminateSection<IsBalanced, IsSymmetric, 1>>(sectionState);
         case 2:
-            return MakeLaminateSectionBinding<IsBalanced, IsSymmetric, 2>(sectionState);
+            return visitor.template operator()<ConcreteLaminateSection<IsBalanced, IsSymmetric, 2>>(sectionState);
         case 4:
-            return MakeLaminateSectionBinding<IsBalanced, IsSymmetric, 4>(sectionState);
+            return visitor.template operator()<ConcreteLaminateSection<IsBalanced, IsSymmetric, 4>>(sectionState);
         case 5:
-            return MakeLaminateSectionBinding<IsBalanced, IsSymmetric, 5>(sectionState);
+            return visitor.template operator()<ConcreteLaminateSection<IsBalanced, IsSymmetric, 5>>(sectionState);
         case 6:
-            return MakeLaminateSectionBinding<IsBalanced, IsSymmetric, 6>(sectionState);
+            return visitor.template operator()<ConcreteLaminateSection<IsBalanced, IsSymmetric, 6>>(sectionState);
         case 8:
-            return MakeLaminateSectionBinding<IsBalanced, IsSymmetric, 8>(sectionState);
+            return visitor.template operator()<ConcreteLaminateSection<IsBalanced, IsSymmetric, 8>>(sectionState);
         case 10:
-            return MakeLaminateSectionBinding<IsBalanced, IsSymmetric, 10>(sectionState);
-        default: {
-            LaminateSectionBuildResult result;
-            result.message = "Unsupported laminate section sublaminate count: "
-                           + std::to_string(sectionState.sublaminateCount);
-            return result;
-        }
+            return visitor.template operator()<ConcreteLaminateSection<IsBalanced, IsSymmetric, 10>>(sectionState);
+        default:
+            return UnsupportedLaminateSectionDispatch<Result>(sectionState);
     }
 }
 
 }  // namespace detail
 
-inline LaminateSectionBuildResult BuildLaminateSectionBinding(const LaminateSectionState& sectionState) {
+template<typename Visitor>
+typename std::decay_t<Visitor>::Result DispatchLaminateSectionType(const LaminateSectionState& sectionState,
+                                                                   Visitor&& visitor) {
+    using Result = typename std::decay_t<Visitor>::Result;
+
     if (sectionState.sublaminateCount <= 0) {
-        LaminateSectionBuildResult result;
+        Result result;
         result.message = "Laminate section state must define a positive sublaminate count.";
         return result;
     }
 
     if (sectionState.isBalanced) {
         if (sectionState.isSymmetric) {
-            return detail::DispatchLaminateSectionBinding<true, true>(sectionState);
+            return detail::DispatchLaminateSectionTypeByCount<true, true>(
+                sectionState,
+                std::forward<Visitor>(visitor)
+            );
         }
-        return detail::DispatchLaminateSectionBinding<true, false>(sectionState);
+        return detail::DispatchLaminateSectionTypeByCount<true, false>(
+            sectionState,
+            std::forward<Visitor>(visitor)
+        );
     }
 
     if (sectionState.isSymmetric) {
-        return detail::DispatchLaminateSectionBinding<false, true>(sectionState);
+        return detail::DispatchLaminateSectionTypeByCount<false, true>(
+            sectionState,
+            std::forward<Visitor>(visitor)
+        );
     }
-    return detail::DispatchLaminateSectionBinding<false, false>(sectionState);
+    return detail::DispatchLaminateSectionTypeByCount<false, false>(
+        sectionState,
+        std::forward<Visitor>(visitor)
+    );
+}
+
+inline LaminateSectionBuildResult BuildLaminateSectionBinding(const LaminateSectionState& sectionState) {
+    return DispatchLaminateSectionType(sectionState, detail::LaminateSectionBindingVisitor{});
 }
 
 inline bool BuildLaminateSectionBindings(const std::vector<LaminateSectionState>& sectionStates,

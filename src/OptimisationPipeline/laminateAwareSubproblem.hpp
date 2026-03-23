@@ -1,7 +1,7 @@
 #pragma once
 
+#include "laminateSectionBinding.hpp"
 #include "subproblem.hpp"
-#include "../Laminate/laminateSection.hpp"
 
 #include <Eigen/Cholesky>
 
@@ -61,55 +61,27 @@ private:
         std::string message;
     };
 
+    struct ProjectionDispatchVisitor {
+        using Result = ProjectionResult;
+
+        LaminateAwareSubproblemSolver* solver = nullptr;
+        Eigen::VectorXd* candidate = nullptr;
+
+        template<typename Section>
+        Result operator()(const LaminateSectionState& sectionState) const {
+            return solver->template projectSection<Section>(sectionState, *candidate);
+        }
+    };
+
     SubproblemSolver& m_innerSolver;
     LaminateProjectionOptions m_options;
 
     ProjectionResult dispatchProjection(const LaminateSectionState& state, Eigen::VectorXd& candidate) {
-        if (state.sublaminateCount <= 0) {
-            return {false, 0, std::numeric_limits<double>::infinity(),
-                    "Laminate section state must define a positive sublaminate count."};
-        }
-
-        if (state.isBalanced) {
-            if (state.isSymmetric) {
-                return dispatchBySubLaminates<true, true>(state, candidate);
-            }
-            return dispatchBySubLaminates<true, false>(state, candidate);
-        }
-
-        if (state.isSymmetric) {
-            return dispatchBySubLaminates<false, true>(state, candidate);
-        }
-        return dispatchBySubLaminates<false, false>(state, candidate);
+        return DispatchLaminateSectionType(state, ProjectionDispatchVisitor{this, &candidate});
     }
 
-    template<bool IsBalanced, bool IsSymmetric>
-    ProjectionResult dispatchBySubLaminates(const LaminateSectionState& state, Eigen::VectorXd& candidate) {
-        switch (state.sublaminateCount) {
-            case 1:
-                return projectSection<IsBalanced, IsSymmetric, 1>(state, candidate);
-            case 2:
-                return projectSection<IsBalanced, IsSymmetric, 2>(state, candidate);
-            case 4:
-                return projectSection<IsBalanced, IsSymmetric, 4>(state, candidate);
-            case 5:
-                return projectSection<IsBalanced, IsSymmetric, 5>(state, candidate);
-            case 6:
-                return projectSection<IsBalanced, IsSymmetric, 6>(state, candidate);
-            case 8:
-                return projectSection<IsBalanced, IsSymmetric, 8>(state, candidate);
-            case 10:
-                return projectSection<IsBalanced, IsSymmetric, 10>(state, candidate);
-            default:
-                return {false, 0, std::numeric_limits<double>::infinity(),
-                        "Unsupported laminate section sublaminate count: "
-                            + std::to_string(state.sublaminateCount)};
-        }
-    }
-
-    template<bool IsBalanced, bool IsSymmetric, int NSUBLAM>
+    template<typename Section>
     ProjectionResult projectSection(const LaminateSectionState& state, Eigen::VectorXd& candidate) {
-        using Section = lampar::laminateSection<lampar::SingleMaterial, IsBalanced, IsSymmetric, NSUBLAM, double>;
         using Vector = typename Section::Vector_t;
         using Hessian = typename Section::Hessian_t;
 

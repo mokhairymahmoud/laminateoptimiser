@@ -79,11 +79,11 @@ Status legend:
   - current status: the direct section-aware route is now the default orchestration choice for supported laminate problems
   - current status: `LaminateAwareSubproblemSolver` remains available as a fallback projection route
   - remaining work: broaden support beyond the current single-objective linearized laminate problem shape
-- `[~]` Integrate `laminateSection` ownership cleanly into the orchestration layer.
+- `[x]` Integrate `laminateSection` ownership cleanly into the orchestration layer.
   - current status: laminate section offsets and bounds flow from `AnalysisRequest` into `ApproximationProblem`
   - current status: the core solver can now carry full `optsection::section` objects with offsets
   - current status: section creation/binding now lives in reusable `laminateSectionBinding` helpers instead of adapter-specific code
-  - remaining work: reuse the same helpers in every laminate fallback/projection path so section dispatch is defined in one place
+  - current status: laminate fallback/projection paths now reuse the same shared laminate section dispatch helpers, so section dispatch is defined in one place
 - `[~]` Assemble approximate subproblems that simultaneously include:
   - response constraints
   - laminate feasibility constraints
@@ -144,7 +144,7 @@ Status legend:
 - `[x]` The repository has been reduced to the active optimisation architecture.
 - `[x]` The build now compiles only active modules and active regression tests.
 - `[x]` The active orchestration layer, shared job backend layer, and core solver bridges now build around a CalculiX-first FE wrapper, with Abaqus retained only as a compatibility path.
-- `[~]` The core laminate route is in place with shared orchestration-owned section binding helpers, but fallback/projection paths do not all reuse the same helper layer yet.
+- `[x]` The core laminate route is in place with shared orchestration-owned section binding helpers across both direct and fallback laminate paths.
 - `[x]` Reusable laminate section binding helpers exist in the orchestration layer.
 - `[x]` Supported laminate problems now use the direct core laminate route by default, with projection kept as fallback.
 - `[~]` The architecture correctly treats solver-native gradients as optional, and the optimiser-side lamination-parameter derivative path now supports assembled response terms plus partial-gradient merging, but the production derivative chain is still unfinished.
