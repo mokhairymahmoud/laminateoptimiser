@@ -58,6 +58,10 @@ private:
 
 public:
 	approxFunction() {
+		free_terms = Vector_r::Zero();
+		sensitivitiesLinear = Matrix_t::Zero();
+		sensitivitiesReciprocal = Matrix_t::Zero();
+		booleanVector = Vector_r::Zero();
 		dimObjSet = 0;
 		NVAR = nVar;
 		NRESP = nResp;
@@ -66,6 +70,57 @@ public:
 	int getBooleanVector(Vector_r &booleanVect) {
 		booleanVect = booleanVector;
 		return dimObjSet;
+	}
+	void ConfigureLinearModel(const Vector_v& referenceDesign,
+	                         const Vector_r& referenceResponses,
+	                         const Matrix_t& linearGradients,
+	                         const Vector_r& objectiveMask,
+	                         const int objectiveCount) {
+		int iResp;
+
+		free_terms = referenceResponses;
+		sensitivitiesLinear = linearGradients;
+		sensitivitiesReciprocal = Matrix_t::Zero();
+		booleanVector = objectiveMask;
+		dimObjSet = objectiveCount;
+
+		for (iResp = 0; iResp < nResp; ++iResp) {
+			free_terms(iResp) -= linearGradients.col(iResp).transpose() * referenceDesign;
+		}
+	}
+	void ConfigureConLinModel(const Vector_v& referenceDesign,
+	                          const Vector_r& referenceResponses,
+	                          const Matrix_t& responseGradients,
+	                          const Vector_r& objectiveMask,
+	                          const int objectiveCount) {
+		int iResp;
+		ScalarType freeTerm;
+		Vector_v gradLinear, gradReciprocal;
+
+		booleanVector = objectiveMask;
+		dimObjSet = objectiveCount;
+		for (iResp = 0; iResp < nResp; ++iResp) {
+			LinearOrReciprocal(referenceDesign,
+			                  referenceResponses(iResp),
+			                  responseGradients.col(iResp),
+			                  freeTerm,
+			                  gradLinear,
+			                  gradReciprocal);
+			free_terms(iResp) = freeTerm;
+			sensitivitiesLinear.col(iResp) = gradLinear;
+			sensitivitiesReciprocal.col(iResp) = gradReciprocal;
+		}
+	}
+	void ConfigureModel(const Vector_r& modelFreeTerms,
+	                    const Matrix_t& linearGradients,
+	                    const Matrix_t& reciprocalGradients,
+	                    const Vector_r& objectiveMask,
+	                    const int objectiveCount) {
+		free_terms = modelFreeTerms;
+		sensitivitiesLinear = linearGradients;
+		sensitivitiesReciprocal = reciprocalGradients;
+		booleanVector = objectiveMask;
+		dimObjSet = objectiveCount;
 	}
 	void Eval(Vector_v primalVar, Vector_r dualVar, Vector_r &responses, Matrix_t &gradient, Hessian_t &hessian){
 		Vector_v gradLinear, gradReciprocal, gradTemp, primalVarInv;

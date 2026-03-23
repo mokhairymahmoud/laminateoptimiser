@@ -72,6 +72,8 @@ private:
 
 	reduced_Vector_r reduced_ddual_vector_;
 	ScalarType reduced_ddual_scalar_;
+	bool verbose_ = true;
+	int lastIterationCount_ = 0;
 
 
 private:
@@ -166,6 +168,12 @@ public:
 	}
 
 	~responseInterface() {
+	}
+	void setVerbose(const bool verbose) {
+		verbose_ = verbose;
+	}
+	int getLastIterationCount() const {
+		return lastIterationCount_;
 	}
 	void Initialise(ScalarType dual_scale, Vector_v &var)  {
 		Vector_r booleanVector;
@@ -349,6 +357,7 @@ public:
 		double d_g, penalty, d_g_c, predictor, corrector;
 		double pstep = 1.0, dstep = 1.0;
 	    int iter = 0;
+	    lastIterationCount_ = 0;
 
 	    primal_ = var;
 	    Initialise(1.0, primal_);
@@ -373,22 +382,29 @@ public:
 
 			CalculateResiduals(corrector*penalty, response, gradient_matrix);
 
-			std::cout << "correction factor: " << corrector << std::endl;
+			if (verbose_)
+				std::cout << "correction factor: " << corrector << std::endl;
 
 			UpdateIncrements(gradient_matrix);
 			pstep = 1.0; dstep = 1.0;
 			StepSize(pstep,dstep);
 			UpdateVariables(pstep,dstep);
 
-			std::cout << "iteration: " << iter+1 << '\t' << pstep << '\t' << dstep << '\t' << d_g <<std::endl;
+			lastIterationCount_ = iter + 1;
+			if (verbose_)
+				std::cout << "iteration: " << iter+1 << '\t' << pstep << '\t' << dstep << '\t' << d_g <<std::endl;
 		} while(d_g > 1.0e-10 and ++iter<20);
 
 
-		std::cout <<"x = "<<primal_.transpose();
-		std::cout<<std::endl;
+		if (verbose_) {
+			std::cout <<"x = "<<primal_.transpose();
+			std::cout<<std::endl;
+		}
 		approximationObject->Eval(primal_, response);
-		std::cout <<"response_ = "<<response.transpose();
-		std::cout<<std::endl;
+		if (verbose_) {
+			std::cout <<"response_ = "<<response.transpose();
+			std::cout<<std::endl;
+		}
 		var = primal_;
 	}
 };

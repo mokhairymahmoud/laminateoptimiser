@@ -1,4 +1,5 @@
 #include "../src/OptimisationPipeline/globalOptimisationDriver.hpp"
+#include "../src/OptimisationPipeline/legacyMinMaxSubproblem.hpp"
 
 #include <gtest/gtest.h>
 
@@ -66,6 +67,44 @@ public:
     }
 
     int callCount = 0;
+};
+
+class Problem1Backend final : public lamopt::AnalysisBackend {
+public:
+    lamopt::AnalysisResult evaluate(const lamopt::AnalysisRequest& request) override {
+        lamopt::AnalysisResult result;
+        result.status = lamopt::AnalysisStatus::Success;
+
+        const double x1 = request.designVariables(0);
+        const double x2 = request.designVariables(1);
+        const double sqrt2 = std::sqrt(2.0);
+        const double denominator = 2.0 * x1 * x2 + sqrt2 * x1 * x1;
+        const double aux = sqrt2 * x1 * x2 + x1 * x1;
+        const double common = sqrt2 * x2 + x1;
+
+        result.objectives = Eigen::VectorXd::Constant(1, 100.0 * (2.0 * sqrt2 * x1 + x2));
+        result.constraints = Eigen::VectorXd(3);
+        result.constraints << (x2 + sqrt2 * x1) / denominator - 1.0,
+                              1.0 / (x1 + sqrt2 * x2) - 1.0,
+                              4.0 / 3.0 * x2 / denominator - 1.0;
+
+        if (request.requestSensitivities) {
+            Eigen::MatrixXd objectiveGradient(2, 1);
+            objectiveGradient << 200.0 * sqrt2, 100.0;
+            result.objectiveGradients = objectiveGradient;
+
+            Eigen::MatrixXd constraintGradients(2, 3);
+            constraintGradients(0, 0) = -(sqrt2 * x1 * x2 + x1 * x1 + x2 * x2) / std::pow(aux, 2);
+            constraintGradients(1, 0) = -1.0 / (sqrt2 * std::pow(common, 2));
+            constraintGradients(0, 1) = -1.0 / std::pow(common, 2);
+            constraintGradients(1, 1) = -sqrt2 / std::pow(common, 2);
+            constraintGradients(0, 2) = -4.0 / 3.0 * x2 * (x2 + sqrt2 * x1) / std::pow(aux, 2);
+            constraintGradients(1, 2) = 4.0 / 3.0 * 1.0 / (sqrt2 * std::pow(common, 2));
+            result.constraintGradients = constraintGradients;
+        }
+
+        return result;
+    }
 };
 
 std::filesystem::path TempPath(const std::string& name) {
@@ -152,6 +191,61 @@ TEST(GlobalDriverTest, DriverRejectsNonImprovingCandidateAndIncreasesDamping) {
     EXPECT_FALSE(result.history[0].accepted);
     EXPECT_TRUE(result.history[1].accepted);
     EXPECT_GT(result.history[0].dampingFactorsAfter(0), result.history[0].dampingFactorsBefore(0));
+}
+
+TEST(GlobalDriverTest, LegacyMinMaxAdapterSolvesExactLinearSubproblem) {
+    lamopt::LegacyMinMax2Var4RespSubproblemSolver subproblemSolver;
+
+    Problem1Backend backend;
+    lamopt::AnalysisRequest request;
+    request.designVariables = Eigen::Vector2d(1.0, 1.0);
+    request.requestSensitivities = true;
+    const lamopt::AnalysisResult analysis = backend.evaluate(request);
+
+    lamopt::ApproximationProblem problem;
+    problem.referenceDesign = request.designVariables;
+    problem.objectiveValues = analysis.objectives;
+    problem.constraintValues = analysis.constraints;
+    problem.responseDampingFactors = Eigen::VectorXd::Ones(4);
+    problem.designDampingVector = Eigen::Vector2d::Ones();
+    problem.lowerBounds = Eigen::Vector2d::Zero();
+    problem.objectiveGradients = analysis.objectiveGradients;
+    problem.constraintGradients = analysis.constraintGradients;
+
+    const lamopt::SubproblemResult result = subproblemSolver.solve(problem);
+
+    ASSERT_TRUE(result.success);
+    EXPECT_NEAR(result.candidateDesign(0), 0.744299, 1.0e-4);
+    EXPECT_NEAR(result.candidateDesign(1), 0.569662, 1.0e-4);
+    EXPECT_LT(result.predictedObjectives(0), analysis.objectives(0));
+    EXPECT_LE(result.predictedConstraints.maxCoeff(), 1.0e-6);
+}
+
+TEST(GlobalDriverTest, DriverCanUseLegacyMinMaxAdapter) {
+    Problem1Backend backend;
+    lamopt::LinearApproximationBuilder approximationBuilder;
+    lamopt::LegacyMinMax2Var4RespSubproblemSolver subproblemSolver;
+
+    lamopt::DriverOptions options;
+    options.maxOuterIterations = 25;
+    options.maxSubIterations = 4;
+    options.requestSensitivities = true;
+    options.stagnationTolerance = 1.0e-4;
+
+    lamopt::GlobalOptimisationDriver driver(backend, approximationBuilder, subproblemSolver, options);
+
+    lamopt::AnalysisRequest request;
+    request.designVariables = Eigen::Vector2d(1.0, 1.0);
+    request.workDirectory = TempPath("driver_legacy_minmax");
+    request.lowerBounds = Eigen::Vector2d::Zero();
+
+    const lamopt::GlobalOptimisationResult result = driver.optimise(request);
+
+    EXPECT_TRUE(result.converged);
+    EXPECT_NEAR(result.design(0), 0.7886, 5.0e-3);
+    EXPECT_NEAR(result.design(1), 0.4084, 5.0e-3);
+    EXPECT_LE(result.analysis.constraints.maxCoeff(), 1.0e-6);
+    EXPECT_LT(result.analysis.objectives(0), 100.0 * (2.0 * std::sqrt(2.0) + 1.0));
 }
 
 int main(int argc, char** argv) {
