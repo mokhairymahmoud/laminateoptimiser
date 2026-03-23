@@ -136,6 +136,19 @@ std::filesystem::path TempPath(const std::string& name) {
     return path;
 }
 
+lamopt::LaminateSectionState MakeBalancedSymmetricSection(const Eigen::Index variableOffset) {
+    lamopt::LaminateSectionState laminateSection;
+    laminateSection.variableOffset = variableOffset;
+    laminateSection.isBalanced = true;
+    laminateSection.isSymmetric = true;
+    laminateSection.sublaminateCount = 6;
+    laminateSection.thicknessLowerBound = 0.5;
+    laminateSection.thicknessUpperBound = 2.0;
+    laminateSection.thickness = 1.0;
+    laminateSection.laminationParameters = Eigen::VectorXd::Zero(4);
+    return laminateSection;
+}
+
 }  // namespace
 
 TEST(GlobalDriverTest, DriverConvergesWithDirectGradients) {
@@ -387,6 +400,81 @@ TEST(GlobalDriverTest, LegacyLaminateAdapterSolvesSectionConstrainedObjective) {
     EXPECT_LT(result.predictedObjectives(0), -1.2);
 }
 
+TEST(GlobalDriverTest, LegacyLaminateAdapterSupportsResponseConstraints) {
+    lamopt::LegacyLaminateSection1RespSubproblemSolver subproblemSolver;
+
+    lamopt::ApproximationProblem problem;
+    problem.referenceDesign = Eigen::VectorXd::Zero(5);
+    problem.referenceDesign(4) = 1.0;
+    problem.objectiveValues = Eigen::VectorXd::Constant(1, -1.0);
+    problem.constraintValues = Eigen::VectorXd::Constant(1, -0.4);
+    problem.objectiveGradients = Eigen::MatrixXd::Zero(5, 1);
+    (*problem.objectiveGradients)(4, 0) = -1.0;
+    problem.constraintGradients = Eigen::MatrixXd::Zero(5, 1);
+    (*problem.constraintGradients)(4, 0) = 1.0;
+    problem.responseDampingFactors = Eigen::VectorXd::Ones(2);
+    problem.designDampingVector = Eigen::VectorXd::Ones(5);
+    problem.laminateSections.push_back(MakeBalancedSymmetricSection(0));
+
+    const lamopt::SubproblemResult result = subproblemSolver.solve(problem);
+
+    ASSERT_TRUE(result.success);
+    ASSERT_EQ(result.predictedConstraints.size(), 1);
+    EXPECT_TRUE(result.candidateDesign.allFinite());
+    EXPECT_GT(result.candidateDesign(4), 1.1);
+    EXPECT_LT(result.candidateDesign(4), 1.45);
+    EXPECT_LE(result.predictedConstraints(0), 1.0e-6);
+}
+
+TEST(GlobalDriverTest, LegacyLaminateAdapterSupportsSectionOffsets) {
+    lamopt::LegacyLaminateSection1RespSubproblemSolver subproblemSolver;
+
+    lamopt::ApproximationProblem problem;
+    problem.referenceDesign = Eigen::VectorXd::Zero(7);
+    problem.referenceDesign(6) = 1.0;
+    problem.objectiveValues = Eigen::VectorXd::Constant(1, -1.0);
+    problem.constraintValues = Eigen::VectorXd();
+    problem.objectiveGradients = Eigen::MatrixXd::Zero(7, 1);
+    (*problem.objectiveGradients)(6, 0) = -1.0;
+    problem.responseDampingFactors = Eigen::VectorXd::Ones(1);
+    problem.designDampingVector = Eigen::VectorXd::Ones(7);
+    problem.laminateSections.push_back(MakeBalancedSymmetricSection(2));
+
+    const lamopt::SubproblemResult result = subproblemSolver.solve(problem);
+
+    ASSERT_TRUE(result.success);
+    EXPECT_TRUE(result.candidateDesign.allFinite());
+    EXPECT_GT(result.candidateDesign(6), 1.2);
+    EXPECT_LT(result.candidateDesign(6), 2.0);
+}
+
+TEST(GlobalDriverTest, LegacyLaminateAdapterSupportsMultipleSectionBlocks) {
+    lamopt::LegacyLaminateSection1RespSubproblemSolver subproblemSolver;
+
+    lamopt::ApproximationProblem problem;
+    problem.referenceDesign = Eigen::VectorXd::Zero(10);
+    problem.referenceDesign(4) = 1.0;
+    problem.referenceDesign(9) = 1.0;
+    problem.objectiveValues = Eigen::VectorXd::Constant(1, -2.0);
+    problem.constraintValues = Eigen::VectorXd();
+    problem.objectiveGradients = Eigen::MatrixXd::Zero(10, 1);
+    (*problem.objectiveGradients)(4, 0) = -1.0;
+    (*problem.objectiveGradients)(9, 0) = -1.0;
+    problem.responseDampingFactors = Eigen::VectorXd::Ones(1);
+    problem.designDampingVector = Eigen::VectorXd::Ones(10);
+    problem.laminateSections.push_back(MakeBalancedSymmetricSection(0));
+    problem.laminateSections.push_back(MakeBalancedSymmetricSection(5));
+
+    const lamopt::SubproblemResult result = subproblemSolver.solve(problem);
+
+    ASSERT_TRUE(result.success);
+    EXPECT_TRUE(result.candidateDesign.allFinite());
+    EXPECT_GT(result.candidateDesign(4), 1.15);
+    EXPECT_GT(result.candidateDesign(9), 1.15);
+    EXPECT_LT(result.candidateDesign(4), 2.0);
+    EXPECT_LT(result.candidateDesign(9), 2.0);
+}
+
 TEST(GlobalDriverTest, DriverImprovesWithLegacyLaminateSectionAdapter) {
     class ThicknessBackend final : public lamopt::AnalysisBackend {
     public:
@@ -436,6 +524,48 @@ TEST(GlobalDriverTest, DriverImprovesWithLegacyLaminateSectionAdapter) {
                             [](const lamopt::IterationRecord& record) { return record.accepted; }));
     EXPECT_GT(result.design(4), 1.5);
     EXPECT_LT(result.design(4), 2.0);
+    EXPECT_LT(result.analysis.objectives(0), -1.5);
+}
+
+TEST(GlobalDriverTest, DriverImprovesWithOffsetLegacyLaminateSectionAdapter) {
+    class ThicknessBackend final : public lamopt::AnalysisBackend {
+    public:
+        lamopt::AnalysisResult evaluate(const lamopt::AnalysisRequest& request) override {
+            lamopt::AnalysisResult result;
+            result.status = lamopt::AnalysisStatus::Success;
+            result.objectives = Eigen::VectorXd::Constant(1, -request.designVariables(6));
+            result.constraints = Eigen::VectorXd();
+            result.objectiveGradients = Eigen::MatrixXd::Zero(request.designVariables.size(), 1);
+            (*result.objectiveGradients)(6, 0) = -1.0;
+            return result;
+        }
+    } backend;
+
+    lamopt::LinearApproximationBuilder approximationBuilder;
+    lamopt::LegacyLaminateSection1RespSubproblemSolver subproblemSolver;
+
+    lamopt::DriverOptions options;
+    options.maxOuterIterations = 12;
+    options.maxSubIterations = 4;
+    options.requestSensitivities = true;
+    options.stagnationTolerance = 1.0e-6;
+
+    lamopt::GlobalOptimisationDriver driver(backend, approximationBuilder, subproblemSolver, options);
+
+    lamopt::AnalysisRequest request;
+    request.designVariables = Eigen::VectorXd::Zero(7);
+    request.designVariables(6) = 1.0;
+    request.workDirectory = TempPath("driver_legacy_laminate_adapter_offset");
+    request.laminateSections.push_back(MakeBalancedSymmetricSection(2));
+
+    const lamopt::GlobalOptimisationResult result = driver.optimise(request);
+
+    EXPECT_FALSE(result.history.empty());
+    EXPECT_TRUE(std::any_of(result.history.begin(),
+                            result.history.end(),
+                            [](const lamopt::IterationRecord& record) { return record.accepted; }));
+    EXPECT_GT(result.design(6), 1.5);
+    EXPECT_LT(result.design(6), 2.0);
     EXPECT_LT(result.analysis.objectives(0), -1.5);
 }
 

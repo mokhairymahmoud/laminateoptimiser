@@ -207,9 +207,9 @@ public:
 				(approximationFunction::Vector_r::Ones()-booleanVector)/(nResp-dimObjSet);
 */
 		dual_ = dual_scale*slack_.cwiseInverse();
-		dslack_ = approximationFunction::Vector_r::Zero();
-		ddual_ = approximationFunction::Vector_r::Zero();
-		dprimal_ = approximationFunction::Vector_v::Zero();
+		dslack_ = approximationFunction::Vector_r::Zero(nResp);
+		ddual_ = approximationFunction::Vector_r::Zero(nResp);
+		dprimal_ = approximationFunction::Vector_v::Zero(nVar);
 		objective_dprimal_ = 0;
 	}
 	void HessianEval(Matrix_t gradient_matrix, Hessian_t &primal_hessian)  {
@@ -221,7 +221,7 @@ public:
 		Matrix_t gradient_matrix_temp;
 		int iVar;
 
-		duality_hessian = approximationFunction::Hessian_r::Zero();
+		duality_hessian = approximationFunction::Hessian_r::Zero(nResp, nResp);
 	// change this once we add lamination
 		for (iVar=0;iVar<nVar;iVar++)
 			sideObject[iVar].Hessian(primal_hessian(iVar,iVar));
@@ -260,7 +260,7 @@ public:
 		Vector_v primal_residual_temp;
 		reduced_Vector_r reduced_duality_residual_vector_temp;
 
-		dslack_ = penalty*Vector_r::Ones()-slack_.cwiseProduct(dual_)-dslack_.cwiseProduct(ddual_);
+		dslack_ = penalty*Vector_r::Ones(nResp)-slack_.cwiseProduct(dual_)-dslack_.cwiseProduct(ddual_);
 		ddual_ = response- booleanVector_*objective_primal_+ slack_;
 		ddual_ +=  dslack_.cwiseProduct(dual_.cwiseInverse());
 		objective_dprimal_ = -(ScalarType)1.0+booleanVector_.transpose()*dual_;
@@ -360,9 +360,9 @@ public:
 	// end change
 
 		objective_dprimal_ = 0;
-		ddual_ = Vector_r::Zero();
-		dslack_ = Vector_r::Zero();
-		dprimal_ = Vector_v::Zero(); // change this once we add lamination
+		ddual_ = Vector_r::Zero(nResp);
+		dslack_ = Vector_r::Zero(nResp);
+		dprimal_ = Vector_v::Zero(nVar); // change this once we add lamination
 	}
 	void Solver(Vector_v &var){
 		Matrix_t gradient_matrix;
@@ -381,8 +381,8 @@ public:
 			d_g = DualityGap();
 			penalty = d_g/(nResp+nVar);
 			predictor = SDPA::Parameter<>::Predictor_Duality_Reduction();
-			primal_hessian = approximationFunction::Hessian_t::Zero();
-			gradient_matrix = approximationFunction::Matrix_t::Zero();
+			primal_hessian = approximationFunction::Hessian_t::Zero(nVar, nVar);
+			gradient_matrix = approximationFunction::Matrix_t::Zero(nVar, nResp);
 		// change this once we add lamination
 			approximationObject->Eval(primal_, dual_, response, gradient_matrix, primal_hessian);
 			approximationObject->getBooleanVector(booleanVector_);
