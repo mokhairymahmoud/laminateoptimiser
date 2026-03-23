@@ -3,6 +3,7 @@ set(ACTIVE_TEST_FILES
     abaqus_backend_test.cpp
     dampingUtils_test.cpp
     global_driver_test.cpp
+    lamination_parameter_derivatives_test.cpp
     laminate_test.cpp
     minmaxprob_test.cpp
     section_test.cpp

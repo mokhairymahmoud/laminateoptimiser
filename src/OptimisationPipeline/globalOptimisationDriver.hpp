@@ -2,6 +2,7 @@
 
 #include "analysis.hpp"
 #include "approximation.hpp"
+#include "laminationParameterDerivatives.hpp"
 #include "subproblem.hpp"
 #include "../GlobalOptimiser/dampingUtils.hpp"
 
@@ -61,11 +62,13 @@ public:
     GlobalOptimisationDriver(AnalysisBackend& analysisBackend,
                              ApproximationBuilder& approximationBuilder,
                              SubproblemSolver& subproblemSolver,
-                             DriverOptions options = {})
+                             DriverOptions options = {},
+                             LaminationParameterDerivativeProvider* laminationDerivativeProvider = nullptr)
         : m_analysisBackend(analysisBackend)
         , m_approximationBuilder(approximationBuilder)
         , m_subproblemSolver(subproblemSolver)
-        , m_options(options) {}
+        , m_options(options)
+        , m_laminationDerivativeProvider(laminationDerivativeProvider) {}
 
     GlobalOptimisationResult optimise(const AnalysisRequest& initialRequest) {
         GlobalOptimisationResult result;
@@ -190,6 +193,7 @@ private:
     ApproximationBuilder& m_approximationBuilder;
     SubproblemSolver& m_subproblemSolver;
     DriverOptions m_options;
+    LaminationParameterDerivativeProvider* m_laminationDerivativeProvider = nullptr;
 
     AnalysisResult evaluateWithFallback(const AnalysisRequest& request) {
         AnalysisResult baseResult = m_analysisBackend.evaluate(request);
@@ -201,17 +205,33 @@ private:
             return baseResult;
         }
 
+        attachOptimiserSideLaminateGradients(request, baseResult);
+        if (baseResult.hasAllGradients()) {
+            return baseResult;
+        }
+
         if (m_options.gradientFallbackMode != GradientFallbackMode::FiniteDifference) {
             baseResult.status = AnalysisStatus::MissingGradients;
-            baseResult.diagnostics.message = "Analysis backend returned no gradients and fallback is disabled.";
+            appendDiagnosticMessage(baseResult.diagnostics.message,
+                                    "Analysis backend returned incomplete gradients and finite-difference fallback is disabled.");
             return baseResult;
         }
 
         const Eigen::Index nVar = request.designVariables.size();
         const Eigen::Index nObj = baseResult.objectives.size();
         const Eigen::Index nCon = baseResult.constraints.size();
-        Eigen::MatrixXd objectiveGradients = Eigen::MatrixXd::Zero(nVar, nObj);
-        Eigen::MatrixXd constraintGradients = Eigen::MatrixXd::Zero(nVar, nCon);
+        const bool needObjectiveGradients = !baseResult.hasObjectiveGradients();
+        const bool needConstraintGradients = !baseResult.hasConstraintGradients();
+        Eigen::MatrixXd objectiveGradients =
+            Eigen::MatrixXd::Zero(nVar, nObj);
+        Eigen::MatrixXd constraintGradients =
+            Eigen::MatrixXd::Zero(nVar, nCon);
+        if (!needObjectiveGradients && baseResult.objectiveGradients.has_value()) {
+            objectiveGradients = *baseResult.objectiveGradients;
+        }
+        if (!needConstraintGradients && baseResult.constraintGradients.has_value()) {
+            constraintGradients = *baseResult.constraintGradients;
+        }
 
         for (Eigen::Index iVar = 0; iVar < nVar; ++iVar) {
             AnalysisRequest perturbedRequest = request;
@@ -227,20 +247,24 @@ private:
                 return perturbedResult;
             }
 
-            if (nObj != 0) {
+            if (needObjectiveGradients && nObj != 0) {
                 objectiveGradients.row(iVar) =
                     ((perturbedResult.objectives - baseResult.objectives) / m_options.finiteDifferenceStep).transpose();
             }
-            if (nCon != 0) {
+            if (needConstraintGradients && nCon != 0) {
                 constraintGradients.row(iVar) =
                     ((perturbedResult.constraints - baseResult.constraints) / m_options.finiteDifferenceStep).transpose();
             }
         }
 
-        baseResult.objectiveGradients = objectiveGradients;
-        baseResult.constraintGradients = constraintGradients;
+        if (needObjectiveGradients) {
+            baseResult.objectiveGradients = objectiveGradients;
+        }
+        if (needConstraintGradients) {
+            baseResult.constraintGradients = constraintGradients;
+        }
         baseResult.status = AnalysisStatus::Success;
-        baseResult.diagnostics.message += " Finite-difference gradients attached.";
+        appendDiagnosticMessage(baseResult.diagnostics.message, "Finite-difference gradients attached.");
         return baseResult;
     }
 
@@ -296,6 +320,42 @@ private:
             return {};
         }
         return root / ("fd_" + std::to_string(variableIndex));
+    }
+
+    void attachOptimiserSideLaminateGradients(const AnalysisRequest& request,
+                                              AnalysisResult& result) const {
+        if (m_laminationDerivativeProvider == nullptr || result.hasAllGradients()) {
+            return;
+        }
+
+        LaminationParameterDerivativeResult derivativeResult =
+            m_laminationDerivativeProvider->compute(request, result);
+        if (!derivativeResult.success) {
+            if (!derivativeResult.message.empty()) {
+                appendDiagnosticMessage(result.diagnostics.message, derivativeResult.message);
+            }
+            return;
+        }
+
+        if (!result.hasObjectiveGradients() && derivativeResult.objectiveGradients.has_value()) {
+            result.objectiveGradients = derivativeResult.objectiveGradients;
+        }
+        if (!result.hasConstraintGradients() && derivativeResult.constraintGradients.has_value()) {
+            result.constraintGradients = derivativeResult.constraintGradients;
+        }
+        if (!derivativeResult.message.empty()) {
+            appendDiagnosticMessage(result.diagnostics.message, derivativeResult.message);
+        }
+    }
+
+    static void appendDiagnosticMessage(std::string& message, const std::string& suffix) {
+        if (suffix.empty()) {
+            return;
+        }
+        if (!message.empty() && message.back() != ' ') {
+            message += ' ';
+        }
+        message += suffix;
     }
 };
 
