@@ -81,16 +81,16 @@ private:
     int objectiveCount = 0;
 };
 
-struct LegacyMinMax2Var4RespOptions {
+struct CoreMinMax2Var4RespOptions {
     double defaultLowerBound = 1.0e-6;
     double strictLowerBoundFloor = 1.0e-9;
     double objectiveScaleFloor = 1.0e-12;
     bool verbose = false;
 };
 
-class LegacyMinMax2Var4RespSubproblemSolver : public SubproblemSolver {
+class CoreMinMax2Var4RespSubproblemSolver : public SubproblemSolver {
 public:
-    explicit LegacyMinMax2Var4RespSubproblemSolver(LegacyMinMax2Var4RespOptions options = {})
+    explicit CoreMinMax2Var4RespSubproblemSolver(CoreMinMax2Var4RespOptions options = {})
         : m_options(options) {}
 
     SubproblemResult solve(const ApproximationProblem& problem) override {
@@ -100,28 +100,28 @@ public:
         SubproblemResult result;
 
         if (problem.referenceDesign.size() != 2) {
-            result.message = "Legacy min-max adapter currently supports exactly 2 design variables.";
+            result.message = "Core min-max adapter currently supports exactly 2 design variables.";
             return result;
         }
         if (problem.objectiveValues.size() != 1 || problem.constraintValues.size() != 3) {
-            result.message = "Legacy min-max adapter currently supports 1 objective and 3 constraints.";
+            result.message = "Core min-max adapter currently supports 1 objective and 3 constraints.";
             return result;
         }
         if (!problem.objectiveGradients.has_value() || !problem.constraintGradients.has_value()) {
-            result.message = "Legacy min-max adapter requires objective and constraint gradients.";
+            result.message = "Core min-max adapter requires objective and constraint gradients.";
             return result;
         }
         if (problem.objectiveGradients->rows() != 2 || problem.objectiveGradients->cols() != 1) {
-            result.message = "Objective gradient dimensions do not match the legacy adapter requirements.";
+            result.message = "Objective gradient dimensions do not match the core adapter requirements.";
             return result;
         }
         if (problem.constraintGradients->rows() != 2 || problem.constraintGradients->cols() != 3) {
-            result.message = "Constraint gradient dimensions do not match the legacy adapter requirements.";
+            result.message = "Constraint gradient dimensions do not match the core adapter requirements.";
             return result;
         }
         if (!problem.laminateSections.empty()) {
             result.message =
-                "Laminate section side constraints are not yet wired into the legacy min-max adapter.";
+                "Laminate section side constraints are not yet wired into the core min-max benchmark adapter.";
             return result;
         }
 
@@ -151,7 +151,7 @@ public:
             double lowerBound = m_options.defaultLowerBound;
             if (problem.lowerBounds.has_value()) {
                 if (problem.lowerBounds->size() != 2) {
-                    result.message = "Lower bound vector size does not match the legacy adapter requirements.";
+                    result.message = "Lower bound vector size does not match the core adapter requirements.";
                     return result;
                 }
                 lowerBound = (*problem.lowerBounds)(iVar);
@@ -179,7 +179,7 @@ public:
         }
         if (problem.upperBounds.has_value()) {
             if (problem.upperBounds->size() != 2) {
-                result.message = "Upper bound vector size does not match the legacy adapter requirements.";
+                result.message = "Upper bound vector size does not match the core adapter requirements.";
                 return result;
             }
             candidate = candidate.cwiseMin(*problem.upperBounds);
@@ -195,24 +195,24 @@ public:
         result.predictedObjectives = Eigen::VectorXd::Constant(1, predictedResponses(0) * objectiveScale);
         result.predictedConstraints = Eigen::VectorXd(3);
         result.predictedConstraints << predictedResponses(1), predictedResponses(2), predictedResponses(3);
-        result.message = "Candidate produced by the legacy scMinMaxProb adapter.";
+        result.message = "Candidate produced by the core scMinMaxProb adapter.";
         return result;
     }
 
 private:
-    LegacyMinMax2Var4RespOptions m_options;
+    CoreMinMax2Var4RespOptions m_options;
 };
 
-struct LegacyLaminateSection1RespOptions {
+struct CoreLaminateSection1RespOptions {
     double defaultLowerBound = -10.0;
     double strictBoundMargin = 1.0e-9;
     double objectiveScaleFloor = 1.0e-12;
     bool verbose = false;
 };
 
-class LegacyLaminateSection1RespSubproblemSolver : public SubproblemSolver {
+class CoreLaminateSection1RespSubproblemSolver : public SubproblemSolver {
 public:
-    explicit LegacyLaminateSection1RespSubproblemSolver(LegacyLaminateSection1RespOptions options = {})
+    explicit CoreLaminateSection1RespSubproblemSolver(CoreLaminateSection1RespOptions options = {})
         : m_options(options) {}
 
     SubproblemResult solve(const ApproximationProblem& problem) override {
@@ -224,11 +224,11 @@ public:
         const Eigen::Index constraintCount = problem.constraintValues.size();
 
         if (problem.objectiveValues.size() != 1) {
-            result.message = "Legacy laminate adapter currently supports exactly 1 objective response.";
+            result.message = "Core laminate adapter currently supports exactly 1 objective response.";
             return result;
         }
         if (!problem.objectiveGradients.has_value()) {
-            result.message = "Legacy laminate adapter requires objective gradients.";
+            result.message = "Core laminate adapter requires objective gradients.";
             return result;
         }
         if (problem.objectiveGradients->rows() != variableCount || problem.objectiveGradients->cols() != 1) {
@@ -248,7 +248,7 @@ public:
             }
         }
         if (problem.laminateSections.empty()) {
-            result.message = "Legacy laminate adapter requires at least one laminate section block.";
+            result.message = "Core laminate adapter requires at least one laminate section block.";
             return result;
         }
         if (problem.lowerBounds.has_value() && problem.lowerBounds->size() != variableCount) {
@@ -356,7 +356,7 @@ public:
         result.predictedConstraints = constraintCount == 0
             ? Eigen::VectorXd()
             : predictedResponses.segment(1, constraintCount);
-        result.message = "Candidate produced by the legacy laminate section adapter.";
+        result.message = "Candidate produced by the core laminate section adapter.";
         return result;
     }
 
@@ -435,7 +435,7 @@ private:
         return dispatchBySubLaminates<false, false>(sectionState);
     }
 
-    LegacyLaminateSection1RespOptions m_options;
+    CoreLaminateSection1RespOptions m_options;
 };
 
 }  // namespace lamopt

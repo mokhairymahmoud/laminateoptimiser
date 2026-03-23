@@ -1,6 +1,6 @@
 #include "../src/OptimisationPipeline/globalOptimisationDriver.hpp"
 #include "../src/OptimisationPipeline/laminateAwareSubproblem.hpp"
-#include "../src/OptimisationPipeline/legacyMinMaxSubproblem.hpp"
+#include "../src/OptimisationPipeline/coreMinMaxSubproblem.hpp"
 
 #include <gtest/gtest.h>
 
@@ -227,8 +227,8 @@ TEST(GlobalDriverTest, DriverRejectsNonImprovingCandidateAndIncreasesDamping) {
     EXPECT_GT(result.history[0].dampingFactorsAfter(0), result.history[0].dampingFactorsBefore(0));
 }
 
-TEST(GlobalDriverTest, LegacyMinMaxAdapterSolvesExactLinearSubproblem) {
-    lamopt::LegacyMinMax2Var4RespSubproblemSolver subproblemSolver;
+TEST(GlobalDriverTest, CoreMinMaxAdapterSolvesExactLinearSubproblem) {
+    lamopt::CoreMinMax2Var4RespSubproblemSolver subproblemSolver;
 
     Problem1Backend backend;
     lamopt::AnalysisRequest request;
@@ -255,10 +255,10 @@ TEST(GlobalDriverTest, LegacyMinMaxAdapterSolvesExactLinearSubproblem) {
     EXPECT_LE(result.predictedConstraints.maxCoeff(), 1.0e-6);
 }
 
-TEST(GlobalDriverTest, DriverCanUseLegacyMinMaxAdapter) {
+TEST(GlobalDriverTest, DriverCanUseCoreMinMaxAdapter) {
     Problem1Backend backend;
     lamopt::LinearApproximationBuilder approximationBuilder;
-    lamopt::LegacyMinMax2Var4RespSubproblemSolver subproblemSolver;
+    lamopt::CoreMinMax2Var4RespSubproblemSolver subproblemSolver;
 
     lamopt::DriverOptions options;
     options.maxOuterIterations = 25;
@@ -270,7 +270,7 @@ TEST(GlobalDriverTest, DriverCanUseLegacyMinMaxAdapter) {
 
     lamopt::AnalysisRequest request;
     request.designVariables = Eigen::Vector2d(1.0, 1.0);
-    request.workDirectory = TempPath("driver_legacy_minmax");
+    request.workDirectory = TempPath("driver_core_minmax");
     request.lowerBounds = Eigen::Vector2d::Zero();
 
     const lamopt::GlobalOptimisationResult result = driver.optimise(request);
@@ -367,8 +367,8 @@ TEST(GlobalDriverTest, DriverCanRunWithLaminateAwareSubproblemWrapper) {
     EXPECT_LT(result.analysis.objectives(0), -1.5);
 }
 
-TEST(GlobalDriverTest, LegacyLaminateAdapterSolvesSectionConstrainedObjective) {
-    lamopt::LegacyLaminateSection1RespSubproblemSolver subproblemSolver;
+TEST(GlobalDriverTest, CoreLaminateAdapterSolvesSectionConstrainedObjective) {
+    lamopt::CoreLaminateSection1RespSubproblemSolver subproblemSolver;
 
     lamopt::ApproximationProblem problem;
     problem.referenceDesign = Eigen::VectorXd::Zero(5);
@@ -400,8 +400,8 @@ TEST(GlobalDriverTest, LegacyLaminateAdapterSolvesSectionConstrainedObjective) {
     EXPECT_LT(result.predictedObjectives(0), -1.2);
 }
 
-TEST(GlobalDriverTest, LegacyLaminateAdapterSupportsResponseConstraints) {
-    lamopt::LegacyLaminateSection1RespSubproblemSolver subproblemSolver;
+TEST(GlobalDriverTest, CoreLaminateAdapterSupportsResponseConstraints) {
+    lamopt::CoreLaminateSection1RespSubproblemSolver subproblemSolver;
 
     lamopt::ApproximationProblem problem;
     problem.referenceDesign = Eigen::VectorXd::Zero(5);
@@ -426,8 +426,8 @@ TEST(GlobalDriverTest, LegacyLaminateAdapterSupportsResponseConstraints) {
     EXPECT_LE(result.predictedConstraints(0), 1.0e-6);
 }
 
-TEST(GlobalDriverTest, LegacyLaminateAdapterSupportsSectionOffsets) {
-    lamopt::LegacyLaminateSection1RespSubproblemSolver subproblemSolver;
+TEST(GlobalDriverTest, CoreLaminateAdapterSupportsSectionOffsets) {
+    lamopt::CoreLaminateSection1RespSubproblemSolver subproblemSolver;
 
     lamopt::ApproximationProblem problem;
     problem.referenceDesign = Eigen::VectorXd::Zero(7);
@@ -448,8 +448,8 @@ TEST(GlobalDriverTest, LegacyLaminateAdapterSupportsSectionOffsets) {
     EXPECT_LT(result.candidateDesign(6), 2.0);
 }
 
-TEST(GlobalDriverTest, LegacyLaminateAdapterSupportsMultipleSectionBlocks) {
-    lamopt::LegacyLaminateSection1RespSubproblemSolver subproblemSolver;
+TEST(GlobalDriverTest, CoreLaminateAdapterSupportsMultipleSectionBlocks) {
+    lamopt::CoreLaminateSection1RespSubproblemSolver subproblemSolver;
 
     lamopt::ApproximationProblem problem;
     problem.referenceDesign = Eigen::VectorXd::Zero(10);
@@ -475,7 +475,7 @@ TEST(GlobalDriverTest, LegacyLaminateAdapterSupportsMultipleSectionBlocks) {
     EXPECT_LT(result.candidateDesign(9), 2.0);
 }
 
-TEST(GlobalDriverTest, DriverImprovesWithLegacyLaminateSectionAdapter) {
+TEST(GlobalDriverTest, DriverImprovesWithCoreLaminateSectionAdapter) {
     class ThicknessBackend final : public lamopt::AnalysisBackend {
     public:
         lamopt::AnalysisResult evaluate(const lamopt::AnalysisRequest& request) override {
@@ -490,7 +490,7 @@ TEST(GlobalDriverTest, DriverImprovesWithLegacyLaminateSectionAdapter) {
     } backend;
 
     lamopt::LinearApproximationBuilder approximationBuilder;
-    lamopt::LegacyLaminateSection1RespSubproblemSolver subproblemSolver;
+    lamopt::CoreLaminateSection1RespSubproblemSolver subproblemSolver;
 
     lamopt::DriverOptions options;
     options.maxOuterIterations = 12;
@@ -503,7 +503,7 @@ TEST(GlobalDriverTest, DriverImprovesWithLegacyLaminateSectionAdapter) {
     lamopt::AnalysisRequest request;
     request.designVariables = Eigen::VectorXd::Zero(5);
     request.designVariables(4) = 1.0;
-    request.workDirectory = TempPath("driver_legacy_laminate_adapter");
+    request.workDirectory = TempPath("driver_core_laminate_adapter");
 
     lamopt::LaminateSectionState laminateSection;
     laminateSection.variableOffset = 0;
@@ -527,7 +527,7 @@ TEST(GlobalDriverTest, DriverImprovesWithLegacyLaminateSectionAdapter) {
     EXPECT_LT(result.analysis.objectives(0), -1.5);
 }
 
-TEST(GlobalDriverTest, DriverImprovesWithOffsetLegacyLaminateSectionAdapter) {
+TEST(GlobalDriverTest, DriverImprovesWithOffsetCoreLaminateSectionAdapter) {
     class ThicknessBackend final : public lamopt::AnalysisBackend {
     public:
         lamopt::AnalysisResult evaluate(const lamopt::AnalysisRequest& request) override {
@@ -542,7 +542,7 @@ TEST(GlobalDriverTest, DriverImprovesWithOffsetLegacyLaminateSectionAdapter) {
     } backend;
 
     lamopt::LinearApproximationBuilder approximationBuilder;
-    lamopt::LegacyLaminateSection1RespSubproblemSolver subproblemSolver;
+    lamopt::CoreLaminateSection1RespSubproblemSolver subproblemSolver;
 
     lamopt::DriverOptions options;
     options.maxOuterIterations = 12;
@@ -555,7 +555,7 @@ TEST(GlobalDriverTest, DriverImprovesWithOffsetLegacyLaminateSectionAdapter) {
     lamopt::AnalysisRequest request;
     request.designVariables = Eigen::VectorXd::Zero(7);
     request.designVariables(6) = 1.0;
-    request.workDirectory = TempPath("driver_legacy_laminate_adapter_offset");
+    request.workDirectory = TempPath("driver_core_laminate_adapter_offset");
     request.laminateSections.push_back(MakeBalancedSymmetricSection(2));
 
     const lamopt::GlobalOptimisationResult result = driver.optimise(request);
