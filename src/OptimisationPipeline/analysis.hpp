@@ -27,7 +27,10 @@ struct AnalysisDiagnostics {
 };
 
 struct LaminateSectionState {
+    Eigen::Index variableOffset = 0;
     double thickness = 0.0;
+    double thicknessLowerBound = 0.0;
+    double thicknessUpperBound = 1.0;
     Eigen::VectorXd laminationParameters;
     bool isBalanced = false;
     bool isSymmetric = true;
@@ -58,11 +61,11 @@ struct AnalysisResult {
     }
 
     [[nodiscard]] bool hasObjectiveGradients() const {
-        return objectiveGradients.has_value();
+        return objectives.size() == 0 || objectiveGradients.has_value();
     }
 
     [[nodiscard]] bool hasConstraintGradients() const {
-        return constraintGradients.has_value();
+        return constraints.size() == 0 || constraintGradients.has_value();
     }
 
     [[nodiscard]] bool hasAllGradients() const {

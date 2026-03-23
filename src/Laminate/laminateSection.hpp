@@ -63,7 +63,7 @@ public:
 		duality += lowerBoundThickness_.DualityGap();
 		return  duality;
 	}
-	void HessianEval(Hessian_t hessian){
+	void HessianEval(Hessian_t &hessian){
 		Hessian_lpfeasible hessian_lp;
 
 		hessian_lp = hessian.block(0,0,base_lpfeasible::Size,base_lpfeasible::Size);
@@ -73,16 +73,27 @@ public:
 		lowerBoundThickness_.Hessian(hessian(base_lpfeasible::Size,base_lpfeasible::Size));
 		hessian_ = hessian;
 	}
-	void CalculateResiduals(const Vector_t &var, Vector_t residual, const ScalarType penalty){
+	void HessianEval(Eigen::Matrix<ScalarType,Eigen::Dynamic,Eigen::Dynamic> &hessian){
+		Hessian_t fixed_hessian = hessian;
+		HessianEval(fixed_hessian);
+		hessian = fixed_hessian;
+	}
+	void CalculateResiduals(const Vector_t &var, Vector_t &residual, const ScalarType penalty){
 		Vector_lpfeasible residual_lp;
 		residual_lp = residual.block(0,0,base_lpfeasible::Size,1);
 		lpfeasible_.CalculateResiduals(var.block(0,0,base_lpfeasible::Size,1),residual_lp,penalty);
 		residual.block(0,0,base_lpfeasible::Size,1) = residual_lp;
 		upperBoundThickness_.CalculateResiduals(residual(base_lpfeasible::Size),penalty);
-		std::cout<<"residual= "<<residual;std::cout<<endl;
 		lowerBoundThickness_.CalculateResiduals(residual(base_lpfeasible::Size),penalty);
-		std::cout<<"residual= "<<residual;std::cout<<endl;
 		residual_ = residual;
+	}
+	void CalculateResiduals(const Eigen::Matrix<ScalarType,Eigen::Dynamic,1> &var,
+	                        Eigen::Matrix<ScalarType,Eigen::Dynamic,1> &residual,
+	                        const ScalarType penalty){
+		Vector_t fixed_var = var;
+		Vector_t fixed_residual = residual;
+		CalculateResiduals(fixed_var, fixed_residual, penalty);
+		residual = fixed_residual;
 	}
 	void UpdateIncrements(const Vector_t &dvar){
 		lpfeasible_.UpdateIncrements(dvar.block(0,0,base_lpfeasible::Size,1));

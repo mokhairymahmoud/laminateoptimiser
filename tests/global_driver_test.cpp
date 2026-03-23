@@ -1,4 +1,5 @@
 #include "../src/OptimisationPipeline/globalOptimisationDriver.hpp"
+#include "../src/OptimisationPipeline/laminateAwareSubproblem.hpp"
 #include "../src/OptimisationPipeline/legacyMinMaxSubproblem.hpp"
 
 #include <gtest/gtest.h>
@@ -67,6 +68,25 @@ public:
     }
 
     int callCount = 0;
+};
+
+class LaminateScriptedSolver final : public lamopt::SubproblemSolver {
+public:
+    lamopt::SubproblemResult solve(const lamopt::ApproximationProblem& problem) override {
+        lamopt::SubproblemResult result;
+        result.success = true;
+        result.iterations = 1;
+        result.candidateDesign = problem.referenceDesign;
+        result.candidateDesign(0) = 5.0;
+        result.candidateDesign(1) = 5.0;
+        result.candidateDesign(2) = 5.0;
+        result.candidateDesign(3) = 5.0;
+        result.candidateDesign(4) = 5.0;
+        result.predictedObjectives = Eigen::VectorXd::Constant(1, -5.0);
+        result.predictedConstraints = Eigen::VectorXd();
+        result.message = "laminate scripted candidate";
+        return result;
+    }
 };
 
 class Problem1Backend final : public lamopt::AnalysisBackend {
@@ -246,6 +266,91 @@ TEST(GlobalDriverTest, DriverCanUseLegacyMinMaxAdapter) {
     EXPECT_NEAR(result.design(1), 0.4084, 5.0e-3);
     EXPECT_LE(result.analysis.constraints.maxCoeff(), 1.0e-6);
     EXPECT_LT(result.analysis.objectives(0), 100.0 * (2.0 * std::sqrt(2.0) + 1.0));
+}
+
+TEST(GlobalDriverTest, LaminateAwareWrapperProjectsSectionBlocks) {
+    LaminateScriptedSolver scriptedSolver;
+    lamopt::LaminateAwareSubproblemSolver laminateAwareSolver(scriptedSolver);
+
+    lamopt::ApproximationProblem problem;
+    problem.referenceDesign = Eigen::VectorXd::Zero(5);
+    problem.referenceDesign(4) = 1.0;
+    problem.objectiveValues = Eigen::VectorXd::Constant(1, -1.0);
+    problem.constraintValues = Eigen::VectorXd();
+    problem.responseDampingFactors = Eigen::VectorXd::Ones(1);
+    problem.designDampingVector = Eigen::VectorXd::Ones(5);
+
+    lamopt::LaminateSectionState laminateSection;
+    laminateSection.variableOffset = 0;
+    laminateSection.isBalanced = true;
+    laminateSection.isSymmetric = true;
+    laminateSection.sublaminateCount = 6;
+    laminateSection.thicknessLowerBound = 0.5;
+    laminateSection.thicknessUpperBound = 2.0;
+    laminateSection.thickness = 1.0;
+    laminateSection.laminationParameters = Eigen::VectorXd::Zero(4);
+    problem.laminateSections.push_back(laminateSection);
+
+    const lamopt::SubproblemResult result = laminateAwareSolver.solve(problem);
+
+    ASSERT_TRUE(result.success);
+    EXPECT_LT(result.candidateDesign(4), 2.0);
+    EXPECT_GT(result.candidateDesign(4), 0.5);
+    EXPECT_GT(result.candidateDesign(4), 1.5);
+    EXPECT_LT(result.candidateDesign(4), 5.0);
+    EXPECT_TRUE(result.candidateDesign.allFinite());
+    EXPECT_NE(result.message.find("laminate-aware projection complete"), std::string::npos);
+}
+
+TEST(GlobalDriverTest, DriverCanRunWithLaminateAwareSubproblemWrapper) {
+    class ThicknessBackend final : public lamopt::AnalysisBackend {
+    public:
+        lamopt::AnalysisResult evaluate(const lamopt::AnalysisRequest& request) override {
+            lamopt::AnalysisResult result;
+            result.status = lamopt::AnalysisStatus::Success;
+            result.objectives = Eigen::VectorXd::Constant(1, -request.designVariables(4));
+            result.constraints = Eigen::VectorXd();
+            result.objectiveGradients = Eigen::MatrixXd::Zero(request.designVariables.size(), 1);
+            (*result.objectiveGradients)(4, 0) = -1.0;
+            return result;
+        }
+    } backend;
+
+    LaminateScriptedSolver scriptedSolver;
+    lamopt::LaminateAwareSubproblemSolver laminateAwareSolver(scriptedSolver);
+    lamopt::LinearApproximationBuilder approximationBuilder;
+
+    lamopt::DriverOptions options;
+    options.maxOuterIterations = 4;
+    options.maxSubIterations = 2;
+    options.requestSensitivities = true;
+    options.stagnationTolerance = 1.0e-6;
+
+    lamopt::GlobalOptimisationDriver driver(backend, approximationBuilder, laminateAwareSolver, options);
+
+    lamopt::AnalysisRequest request;
+    request.designVariables = Eigen::VectorXd::Zero(5);
+    request.designVariables(4) = 1.0;
+    request.workDirectory = TempPath("driver_laminate_wrapper");
+
+    lamopt::LaminateSectionState laminateSection;
+    laminateSection.variableOffset = 0;
+    laminateSection.isBalanced = true;
+    laminateSection.isSymmetric = true;
+    laminateSection.sublaminateCount = 6;
+    laminateSection.thicknessLowerBound = 0.5;
+    laminateSection.thicknessUpperBound = 2.0;
+    laminateSection.thickness = 1.0;
+    laminateSection.laminationParameters = Eigen::VectorXd::Zero(4);
+    request.laminateSections.push_back(laminateSection);
+
+    const lamopt::GlobalOptimisationResult result = driver.optimise(request);
+
+    EXPECT_TRUE(result.converged);
+    EXPECT_LT(result.design(4), 2.0);
+    EXPECT_GT(result.design(4), 0.5);
+    EXPECT_GT(result.design(4), 1.5);
+    EXPECT_LT(result.analysis.objectives(0), -1.5);
 }
 
 int main(int argc, char** argv) {

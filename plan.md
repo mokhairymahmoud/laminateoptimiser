@@ -50,19 +50,26 @@ Status legend:
   - backend failure
 - `[x]` Keep serializable run state/history and add checkpoint writing support.
 - `[x]` Add integration tests with fake backends and scripted subproblem solvers.
-- `[ ]` Connect the new driver to the legacy `scminmaxProb` solver as the production subproblem backend.
+- `[~]` Connect the new driver to the legacy `scminmaxProb` solver as the production subproblem backend.
+  - current status: a legacy adapter exists and is tested for the benchmark-shaped `2`-variable / `1`-objective / `3`-constraint path
+  - remaining work: generalize the adapter beyond the benchmark shape and wire laminate side constraints into it
 
 ## Phase 4: Laminate-Specific Constraint Integration
 
 - `[x]` Standardize optimiser-side laminate state in the new pipeline request model.
 - `[ ]` Make the lamination-parameter mapping and derivative path explicit on our side of the architecture rather than relying on Abaqus-native gradients.
-- `[ ]` Make laminate sections first-class side constraints in the new subproblem solver path.
-- `[ ]` Integrate `laminateSection` ownership cleanly into the new orchestration layer.
+- `[~]` Make laminate sections first-class side constraints in the new subproblem solver path.
+  - current status: `LaminateAwareSubproblemSolver` can project laminate section blocks using legacy laminate feasibility and thickness bounds after an inner subproblem solve
+  - remaining work: integrate the same section constraints directly into the legacy min-max production solve path instead of repairing candidates afterward
+- `[~]` Integrate `laminateSection` ownership cleanly into the new orchestration layer.
+  - current status: `LaminateSectionState` now carries section offsets and thickness bounds and is propagated from `AnalysisRequest` into `ApproximationProblem`
+  - remaining work: replace the current wrapper-style ownership with direct section-aware subproblem assembly
 - `[ ]` Assemble approximate subproblems that simultaneously include:
   - response constraints
   - laminate feasibility constraints
   - bound constraints
-- `[ ]` Validate the new pipeline using laminate-aware subproblem solves rather than only standalone laminate regressions.
+- `[x]` Validate the new pipeline using laminate-aware subproblem solves rather than only standalone laminate regressions.
+  - current status: `global_driver_test` now covers laminate-aware projection and an end-to-end driver path with laminate section data
 
 ## Phase 5: Abaqus Job-Wrapper Backend
 
@@ -100,5 +107,22 @@ Status legend:
 - `[x]` Legacy numerical demos are now backed by regression-style tests.
 - `[x]` Abaqus backend skeleton exists and is tested.
 - `[x]` Full test suite currently passes.
-- `[~]` The project now has the architectural scaffolding for the planned system, but the new pipeline still uses a generic gradient-penalty subproblem solver rather than the legacy min-max solver and laminate section model as its production backend.
+- `[~]` The project now has a working bridge from the new pipeline into the legacy min-max solver, but only for the benchmark-shaped path and without laminate section side constraints.
+- `[~]` Laminate section data now flows through the new pipeline and a laminate-aware wrapper is tested, but laminate feasibility is still enforced as post-solve projection rather than inside the production legacy min-max solve.
 - `[~]` The architecture now allows Abaqus-native gradients to be optional, but the production lamination-parameter sensitivity path still needs to be implemented explicitly on our side.
+
+## Next Implementation Step
+
+The next implementation step is:
+
+- `[ ]` Move laminate feasibility from the post-solve wrapper into the legacy solver-backed subproblem assembly.
+
+Concretely, that means:
+
+- generalize the current benchmark-specific legacy adapter beyond the `2`-variable / `4`-response benchmark shape
+- pass laminate section definitions from `AnalysisRequest` / `ApproximationProblem` into the legacy subproblem backend
+- solve approximate problems that include, during the solve rather than after projection:
+  - response approximations
+  - thickness bounds
+  - lamination-parameter feasibility constraints
+- add an integration test that exercises the legacy solver path together with laminate-aware constraints, not only the wrapper-only path
