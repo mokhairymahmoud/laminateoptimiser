@@ -92,8 +92,9 @@ Status legend:
   - remaining work: broaden that path beyond the current objective/approximation shape
 - `[~]` Make the lamination-parameter mapping and derivative path explicit on our side of the architecture rather than relying on Abaqus-native gradients.
   - current status: optimiser-owned lamination-parameter derivative interfaces now exist in the pipeline
-  - current status: a first model-backed separable laminate derivative provider is wired into the driver ahead of FE finite-difference fallback
-  - remaining work: broaden the provider beyond the current benchmark response model and connect it to production laminate response assembly
+  - current status: assembled laminate response terms can now mix dense design contributions with laminate-section contributions
+  - current status: the driver now merges masked backend gradients, optimiser-side laminate gradients, and finite-difference fallback in one recovery path
+  - remaining work: connect the assembled response terms to the real FE response quantities extracted for active runs
 
 ## Phase 5: Abaqus Job-Wrapper Backend
 
@@ -121,8 +122,8 @@ Status legend:
 - `[x]` Add basic checkpoint file writing.
 - `[~]` Implement the production lamination-parameter sensitivity path outside Abaqus native gradient support.
   - current status: optimiser-side laminate derivative providers are now plumbed into gradient recovery before finite differences
-  - current status: regression coverage compares the optimiser-side path against finite-difference checks on small laminate benchmarks
-  - remaining work: replace the current benchmark response model with the production laminate derivative chain
+  - current status: regression coverage now exercises complete-model recovery and mixed backend-plus-laminate gradient assembly on small laminate benchmarks
+  - remaining work: replace the in-test response assembly with the production laminate derivative chain driven by real FE response extraction
 - `[ ]` Add restart/resume from checkpoint into the active driver flow.
 - `[ ]` Add richer production logging/output formats.
 - `[ ]` Add failure summaries and diagnostics tailored to real Abaqus runs.
@@ -135,15 +136,15 @@ Status legend:
 - `[~]` The core laminate route is in place with shared orchestration-owned section binding helpers, but fallback/projection paths do not all reuse the same helper layer yet.
 - `[x]` Reusable laminate section binding helpers exist in the orchestration layer.
 - `[x]` Supported laminate problems now use the direct core laminate route by default, with projection kept as fallback.
-- `[~]` The architecture correctly treats Abaqus gradients as optional, and the optimiser-side lamination-parameter derivative path now exists for benchmark laminate response models, but the production derivative chain is still unfinished.
+- `[~]` The architecture correctly treats Abaqus gradients as optional, and the optimiser-side lamination-parameter derivative path now supports assembled response terms plus partial-gradient merging, but the production derivative chain is still unfinished.
 
 ## Next Implementation Step
 
-- `[ ]` Extend the optimiser-side lamination-parameter derivative path from the current benchmark response model to the production laminate response assembly.
+- `[ ]` Bind the assembled optimiser-side laminate response terms to the real FE-facing response extraction path.
 
 Concretely:
 
-1. connect the derivative provider to the real laminate response quantities assembled for active FE runs
-2. make the optimiser-side chain cover the production objective/constraint shapes instead of only the benchmark separable model
-3. preserve native-gradient and finite-difference fallback behavior for unsupported responses
-4. add regression tests around the production laminate derivative path once the FE-facing response assembly is defined
+1. define where active FE runs expose the laminate-dependent objective and constraint quantities needed by the assembled response model
+2. build the production response-term assembly from those extracted quantities instead of constructing benchmark terms in tests
+3. keep masked backend/native gradients, optimiser-side laminate terms, and finite-difference fallback interoperable for unsupported pieces
+4. add regression coverage around the real FE-facing assembly once that extraction contract is defined

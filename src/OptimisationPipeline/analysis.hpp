@@ -52,7 +52,9 @@ struct AnalysisResult {
     Eigen::VectorXd objectives;
     Eigen::VectorXd constraints;
     std::optional<Eigen::MatrixXd> objectiveGradients;
+    std::optional<Eigen::MatrixXi> objectiveGradientMask;
     std::optional<Eigen::MatrixXd> constraintGradients;
+    std::optional<Eigen::MatrixXi> constraintGradientMask;
     std::optional<Eigen::MatrixXd> objectiveCurvature;
     AnalysisDiagnostics diagnostics;
 
@@ -61,15 +63,33 @@ struct AnalysisResult {
     }
 
     [[nodiscard]] bool hasObjectiveGradients() const {
-        return objectives.size() == 0 || objectiveGradients.has_value();
+        return hasCompleteGradientMatrix(objectives, objectiveGradients, objectiveGradientMask);
     }
 
     [[nodiscard]] bool hasConstraintGradients() const {
-        return constraints.size() == 0 || constraintGradients.has_value();
+        return hasCompleteGradientMatrix(constraints, constraintGradients, constraintGradientMask);
     }
 
     [[nodiscard]] bool hasAllGradients() const {
         return hasObjectiveGradients() && hasConstraintGradients();
+    }
+
+private:
+    [[nodiscard]] static bool hasCompleteGradientMatrix(const Eigen::VectorXd& responses,
+                                                        const std::optional<Eigen::MatrixXd>& gradients,
+                                                        const std::optional<Eigen::MatrixXi>& gradientMask) {
+        if (responses.size() == 0) {
+            return true;
+        }
+        if (!gradients.has_value() || gradients->cols() != responses.size()) {
+            return false;
+        }
+        if (!gradientMask.has_value()) {
+            return true;
+        }
+        return gradientMask->rows() == gradients->rows()
+            && gradientMask->cols() == gradients->cols()
+            && gradientMask->minCoeff() != 0;
     }
 };
 

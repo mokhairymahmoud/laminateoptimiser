@@ -222,15 +222,17 @@ private:
         const Eigen::Index nCon = baseResult.constraints.size();
         const bool needObjectiveGradients = !baseResult.hasObjectiveGradients();
         const bool needConstraintGradients = !baseResult.hasConstraintGradients();
-        Eigen::MatrixXd objectiveGradients =
-            Eigen::MatrixXd::Zero(nVar, nObj);
-        Eigen::MatrixXd constraintGradients =
-            Eigen::MatrixXd::Zero(nVar, nCon);
-        if (!needObjectiveGradients && baseResult.objectiveGradients.has_value()) {
-            objectiveGradients = *baseResult.objectiveGradients;
+        if (needObjectiveGradients) {
+            ensureGradientStorage(baseResult.objectiveGradients,
+                                  baseResult.objectiveGradientMask,
+                                  nVar,
+                                  nObj);
         }
-        if (!needConstraintGradients && baseResult.constraintGradients.has_value()) {
-            constraintGradients = *baseResult.constraintGradients;
+        if (needConstraintGradients) {
+            ensureGradientStorage(baseResult.constraintGradients,
+                                  baseResult.constraintGradientMask,
+                                  nVar,
+                                  nCon);
         }
 
         for (Eigen::Index iVar = 0; iVar < nVar; ++iVar) {
@@ -248,21 +250,23 @@ private:
             }
 
             if (needObjectiveGradients && nObj != 0) {
-                objectiveGradients.row(iVar) =
+                const Eigen::RowVectorXd objectiveRow =
                     ((perturbedResult.objectives - baseResult.objectives) / m_options.finiteDifferenceStep).transpose();
+                fillMissingGradientRow(*baseResult.objectiveGradients,
+                                       *baseResult.objectiveGradientMask,
+                                       iVar,
+                                       objectiveRow);
             }
             if (needConstraintGradients && nCon != 0) {
-                constraintGradients.row(iVar) =
+                const Eigen::RowVectorXd constraintRow =
                     ((perturbedResult.constraints - baseResult.constraints) / m_options.finiteDifferenceStep).transpose();
+                fillMissingGradientRow(*baseResult.constraintGradients,
+                                       *baseResult.constraintGradientMask,
+                                       iVar,
+                                       constraintRow);
             }
         }
 
-        if (needObjectiveGradients) {
-            baseResult.objectiveGradients = objectiveGradients;
-        }
-        if (needConstraintGradients) {
-            baseResult.constraintGradients = constraintGradients;
-        }
         baseResult.status = AnalysisStatus::Success;
         appendDiagnosticMessage(baseResult.diagnostics.message, "Finite-difference gradients attached.");
         return baseResult;
@@ -337,11 +341,24 @@ private:
             return;
         }
 
-        if (!result.hasObjectiveGradients() && derivativeResult.objectiveGradients.has_value()) {
-            result.objectiveGradients = derivativeResult.objectiveGradients;
+        const Eigen::Index nVar = request.designVariables.size();
+        if (!mergeGradientContribution(result.objectiveGradients,
+                                       result.objectiveGradientMask,
+                                       derivativeResult.objectiveGradients,
+                                       nVar,
+                                       result.objectives.size(),
+                                       derivativeResult.message)) {
+            appendDiagnosticMessage(result.diagnostics.message, derivativeResult.message);
+            return;
         }
-        if (!result.hasConstraintGradients() && derivativeResult.constraintGradients.has_value()) {
-            result.constraintGradients = derivativeResult.constraintGradients;
+        if (!mergeGradientContribution(result.constraintGradients,
+                                       result.constraintGradientMask,
+                                       derivativeResult.constraintGradients,
+                                       nVar,
+                                       result.constraints.size(),
+                                       derivativeResult.message)) {
+            appendDiagnosticMessage(result.diagnostics.message, derivativeResult.message);
+            return;
         }
         if (!derivativeResult.message.empty()) {
             appendDiagnosticMessage(result.diagnostics.message, derivativeResult.message);
@@ -356,6 +373,61 @@ private:
             message += ' ';
         }
         message += suffix;
+    }
+
+    static void ensureGradientStorage(std::optional<Eigen::MatrixXd>& gradients,
+                                      std::optional<Eigen::MatrixXi>& gradientMask,
+                                      Eigen::Index nVar,
+                                      Eigen::Index nResp) {
+        const bool hadGradients = gradients.has_value();
+        if (!gradients.has_value()) {
+            gradients = Eigen::MatrixXd::Zero(nVar, nResp);
+        }
+        if (!gradientMask.has_value()) {
+            gradientMask = hadGradients
+                ? Eigen::MatrixXi::Ones(nVar, nResp)
+                : Eigen::MatrixXi::Zero(nVar, nResp);
+        }
+    }
+
+    static void fillMissingGradientRow(Eigen::MatrixXd& gradients,
+                                       Eigen::MatrixXi& gradientMask,
+                                       Eigen::Index rowIndex,
+                                       const Eigen::RowVectorXd& rowValues) {
+        for (Eigen::Index iResp = 0; iResp < rowValues.size(); ++iResp) {
+            if (gradientMask(rowIndex, iResp) == 0) {
+                gradients(rowIndex, iResp) = rowValues(iResp);
+                gradientMask(rowIndex, iResp) = 1;
+            }
+        }
+    }
+
+    static bool mergeGradientContribution(std::optional<Eigen::MatrixXd>& gradients,
+                                          std::optional<Eigen::MatrixXi>& gradientMask,
+                                          const std::optional<GradientContributionMatrix>& contribution,
+                                          Eigen::Index nVar,
+                                          Eigen::Index nResp,
+                                          std::string& message) {
+        if (!contribution.has_value()) {
+            return true;
+        }
+        if (contribution->values.rows() != nVar || contribution->values.cols() != nResp
+            || contribution->mask.rows() != nVar || contribution->mask.cols() != nResp) {
+            message = "Optimiser-side laminate derivative contribution dimensions do not match the analysis gradients.";
+            return false;
+        }
+
+        ensureGradientStorage(gradients, gradientMask, nVar, nResp);
+        for (Eigen::Index iVar = 0; iVar < nVar; ++iVar) {
+            for (Eigen::Index iResp = 0; iResp < nResp; ++iResp) {
+                if (contribution->mask(iVar, iResp) != 0 && (*gradientMask)(iVar, iResp) == 0) {
+                    (*gradients)(iVar, iResp) = contribution->values(iVar, iResp);
+                    (*gradientMask)(iVar, iResp) = 1;
+                }
+            }
+        }
+
+        return true;
     }
 };
 

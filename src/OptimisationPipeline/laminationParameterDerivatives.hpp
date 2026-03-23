@@ -9,10 +9,15 @@
 
 namespace lamopt {
 
+struct GradientContributionMatrix {
+    Eigen::MatrixXd values;
+    Eigen::MatrixXi mask;
+};
+
 struct LaminationParameterDerivativeResult {
     bool success = false;
-    std::optional<Eigen::MatrixXd> objectiveGradients;
-    std::optional<Eigen::MatrixXd> constraintGradients;
+    std::optional<GradientContributionMatrix> objectiveGradients;
+    std::optional<GradientContributionMatrix> constraintGradients;
     std::string message;
 };
 
@@ -33,6 +38,11 @@ inline Eigen::Index LaminateSectionVariableCount(const LaminateSectionState& sec
     return laminationParameterCount * variableTypes + 1;
 }
 
+struct DenseDesignResponseTerm {
+    Eigen::VectorXd linearCoefficients;
+    Eigen::VectorXd quadraticCoefficients;
+};
+
 struct SeparableLaminateSectionResponseTerm {
     Eigen::VectorXd linearCoefficients;
     Eigen::VectorXd quadraticCoefficients;
@@ -40,6 +50,7 @@ struct SeparableLaminateSectionResponseTerm {
 
 struct SeparableLaminateResponse {
     double constant = 0.0;
+    DenseDesignResponseTerm designTerms;
     std::vector<SeparableLaminateSectionResponseTerm> sectionTerms;
 };
 
@@ -70,10 +81,10 @@ public:
             return false;
         }
 
-        if (!validateResponses(objectives, sectionSizes, "objective", message)) {
+        if (!validateResponses(objectives, request.designVariables.size(), sectionSizes, "objective", message)) {
             return false;
         }
-        if (!validateResponses(constraints, sectionSizes, "constraint", message)) {
+        if (!validateResponses(constraints, request.designVariables.size(), sectionSizes, "constraint", message)) {
             return false;
         }
 
@@ -88,12 +99,28 @@ public:
         return evaluateResponses(constraints, request);
     }
 
+    [[nodiscard]] Eigen::MatrixXd objectiveDesignGradients(const AnalysisRequest& request) const {
+        return evaluateDesignResponseGradients(objectives, request);
+    }
+
+    [[nodiscard]] Eigen::MatrixXd constraintDesignGradients(const AnalysisRequest& request) const {
+        return evaluateDesignResponseGradients(constraints, request);
+    }
+
+    [[nodiscard]] Eigen::MatrixXd objectiveSectionGradients(const AnalysisRequest& request) const {
+        return evaluateSectionResponseGradients(objectives, request);
+    }
+
+    [[nodiscard]] Eigen::MatrixXd constraintSectionGradients(const AnalysisRequest& request) const {
+        return evaluateSectionResponseGradients(constraints, request);
+    }
+
     [[nodiscard]] Eigen::MatrixXd objectiveGradients(const AnalysisRequest& request) const {
-        return evaluateResponseGradients(objectives, request);
+        return objectiveDesignGradients(request) + objectiveSectionGradients(request);
     }
 
     [[nodiscard]] Eigen::MatrixXd constraintGradients(const AnalysisRequest& request) const {
-        return evaluateResponseGradients(constraints, request);
+        return constraintDesignGradients(request) + constraintSectionGradients(request);
     }
 
 private:
@@ -141,14 +168,18 @@ private:
     }
 
     [[nodiscard]] static bool validateResponses(const std::vector<SeparableLaminateResponse>& responses,
+                                                const Eigen::Index designVariableCount,
                                                 const std::vector<Eigen::Index>& sectionSizes,
                                                 const char* responseKind,
                                                 std::string& message) {
         for (size_t iResponse = 0; iResponse < responses.size(); ++iResponse) {
             const SeparableLaminateResponse& response = responses[iResponse];
-            if (response.sectionTerms.size() != sectionSizes.size()) {
+            if (!validateDenseTerm(response.designTerms, designVariableCount, responseKind, message)) {
+                return false;
+            }
+            if (!response.sectionTerms.empty() && response.sectionTerms.size() != sectionSizes.size()) {
                 message = std::string("Each ") + responseKind
-                        + " model must define one section term per laminate section.";
+                        + " model must define zero section terms or one term per laminate section.";
                 return false;
             }
 
@@ -166,6 +197,26 @@ private:
         return true;
     }
 
+    [[nodiscard]] static bool validateDenseTerm(const DenseDesignResponseTerm& designTerms,
+                                                const Eigen::Index designVariableCount,
+                                                const char* responseKind,
+                                                std::string& message) {
+        const bool linearValid =
+            designTerms.linearCoefficients.size() == 0
+            || designTerms.linearCoefficients.size() == designVariableCount;
+        const bool quadraticValid =
+            designTerms.quadraticCoefficients.size() == 0
+            || designTerms.quadraticCoefficients.size() == designVariableCount;
+
+        if (linearValid && quadraticValid) {
+            return true;
+        }
+
+        message = std::string("The dense design term in a ") + responseKind
+                + " model does not match the design-variable count.";
+        return false;
+    }
+
     [[nodiscard]] static Eigen::VectorXd evaluateResponses(const std::vector<SeparableLaminateResponse>& responses,
                                                            const AnalysisRequest& request) {
         Eigen::VectorXd values = Eigen::VectorXd::Zero(static_cast<Eigen::Index>(responses.size()));
@@ -181,8 +232,9 @@ private:
     [[nodiscard]] static double evaluateResponse(const SeparableLaminateResponse& response,
                                                  const AnalysisRequest& request) {
         double value = response.constant;
+        value += evaluateDenseTerm(response.designTerms, request.designVariables);
 
-        for (size_t iSection = 0; iSection < request.laminateSections.size(); ++iSection) {
+        for (size_t iSection = 0; iSection < response.sectionTerms.size(); ++iSection) {
             const LaminateSectionState& sectionState = request.laminateSections[iSection];
             const SeparableLaminateSectionResponseTerm& sectionTerm = response.sectionTerms[iSection];
             const Eigen::Index sectionSize = sectionTerm.linearCoefficients.size();
@@ -197,7 +249,22 @@ private:
         return value;
     }
 
-    [[nodiscard]] static Eigen::MatrixXd evaluateResponseGradients(
+    [[nodiscard]] static double evaluateDenseTerm(const DenseDesignResponseTerm& designTerms,
+                                                  const Eigen::VectorXd& designVariables) {
+        double value = 0.0;
+
+        if (designTerms.linearCoefficients.size() != 0) {
+            value += designTerms.linearCoefficients.dot(designVariables);
+        }
+        if (designTerms.quadraticCoefficients.size() != 0) {
+            value += 0.5
+                  * designTerms.quadraticCoefficients.dot(designVariables.cwiseProduct(designVariables));
+        }
+
+        return value;
+    }
+
+    [[nodiscard]] static Eigen::MatrixXd evaluateDesignResponseGradients(
         const std::vector<SeparableLaminateResponse>& responses,
         const AnalysisRequest& request) {
         Eigen::MatrixXd gradients =
@@ -205,7 +272,36 @@ private:
                                   static_cast<Eigen::Index>(responses.size()));
 
         for (size_t iResponse = 0; iResponse < responses.size(); ++iResponse) {
-            for (size_t iSection = 0; iSection < request.laminateSections.size(); ++iSection) {
+            gradients.col(static_cast<Eigen::Index>(iResponse)) =
+                evaluateDenseTermGradient(responses[iResponse].designTerms, request.designVariables);
+        }
+
+        return gradients;
+    }
+
+    [[nodiscard]] static Eigen::VectorXd evaluateDenseTermGradient(const DenseDesignResponseTerm& designTerms,
+                                                                   const Eigen::VectorXd& designVariables) {
+        Eigen::VectorXd gradient = Eigen::VectorXd::Zero(designVariables.size());
+
+        if (designTerms.linearCoefficients.size() != 0) {
+            gradient += designTerms.linearCoefficients;
+        }
+        if (designTerms.quadraticCoefficients.size() != 0) {
+            gradient += designTerms.quadraticCoefficients.cwiseProduct(designVariables);
+        }
+
+        return gradient;
+    }
+
+    [[nodiscard]] static Eigen::MatrixXd evaluateSectionResponseGradients(
+        const std::vector<SeparableLaminateResponse>& responses,
+        const AnalysisRequest& request) {
+        Eigen::MatrixXd gradients =
+            Eigen::MatrixXd::Zero(request.designVariables.size(),
+                                  static_cast<Eigen::Index>(responses.size()));
+
+        for (size_t iResponse = 0; iResponse < responses.size(); ++iResponse) {
+            for (size_t iSection = 0; iSection < responses[iResponse].sectionTerms.size(); ++iSection) {
                 const LaminateSectionState& sectionState = request.laminateSections[iSection];
                 const SeparableLaminateSectionResponseTerm& sectionTerm =
                     responses[iResponse].sectionTerms[iSection];
@@ -225,10 +321,22 @@ private:
     }
 };
 
+enum class LaminationParameterCoverageMode {
+    CompleteResponse,
+    LaminateSectionRowsOnly
+};
+
+struct SeparableLaminationParameterDerivativeOptions {
+    LaminationParameterCoverageMode coverageMode = LaminationParameterCoverageMode::CompleteResponse;
+};
+
 class SeparableLaminationParameterDerivativeProvider final : public LaminationParameterDerivativeProvider {
 public:
-    explicit SeparableLaminationParameterDerivativeProvider(SeparableLaminateResponseModel model)
-        : m_model(std::move(model)) {}
+    explicit SeparableLaminationParameterDerivativeProvider(
+        SeparableLaminateResponseModel model,
+        SeparableLaminationParameterDerivativeOptions options = {})
+        : m_model(std::move(model))
+        , m_options(options) {}
 
     [[nodiscard]] bool supports(const AnalysisRequest& request,
                                 const AnalysisResult& result) const override {
@@ -244,10 +352,12 @@ public:
         }
 
         if (!result.hasObjectiveGradients()) {
-            derivativeResult.objectiveGradients = m_model.objectiveGradients(request);
+            derivativeResult.objectiveGradients =
+                makeContribution(request, m_model.objectives.size(), true);
         }
         if (!result.hasConstraintGradients()) {
-            derivativeResult.constraintGradients = m_model.constraintGradients(request);
+            derivativeResult.constraintGradients =
+                makeContribution(request, m_model.constraints.size(), false);
         }
 
         derivativeResult.success = true;
@@ -260,7 +370,38 @@ public:
     }
 
 private:
+    [[nodiscard]] GradientContributionMatrix makeContribution(const AnalysisRequest& request,
+                                                              const size_t responseCount,
+                                                              const bool objectiveResponse) const {
+        GradientContributionMatrix contribution;
+
+        if (m_options.coverageMode == LaminationParameterCoverageMode::CompleteResponse) {
+            contribution.values = objectiveResponse
+                ? m_model.objectiveGradients(request)
+                : m_model.constraintGradients(request);
+            contribution.mask = Eigen::MatrixXi::Ones(contribution.values.rows(), contribution.values.cols());
+            return contribution;
+        }
+
+        contribution.values = objectiveResponse
+            ? m_model.objectiveSectionGradients(request)
+            : m_model.constraintSectionGradients(request);
+        contribution.mask =
+            Eigen::MatrixXi::Zero(request.designVariables.size(), static_cast<Eigen::Index>(responseCount));
+
+        for (const LaminateSectionState& sectionState : request.laminateSections) {
+            const Eigen::Index sectionSize = LaminateSectionVariableCount(sectionState);
+            contribution.mask.block(sectionState.variableOffset,
+                                    0,
+                                    sectionSize,
+                                    static_cast<Eigen::Index>(responseCount)).setOnes();
+        }
+
+        return contribution;
+    }
+
     SeparableLaminateResponseModel m_model;
+    SeparableLaminationParameterDerivativeOptions m_options;
 };
 
 }  // namespace lamopt
