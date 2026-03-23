@@ -1,66 +1,65 @@
-/*
- * Miki_test.cpp
- *
- *  Created on: 7 Jan 2015
- *      Author: root
- */
-
 #include "Miki/Miki.hpp"
 
-#include <iostream>
-#include <Eigen/Dense>
+#include <gtest/gtest.h>
 #include <Eigen/Cholesky>
 
+namespace {
 
-int main()
-{
-	lampar::Miki<lampar::SingleMaterial,false> feasibility(1.0);
-	Eigen::Matrix<double, 4, 1> g, dx, x;
-	Eigen::Matrix<double, 4, 4> B;
-	Eigen::Matrix<double, 3, 3> X;
-	Eigen::LLT<Eigen::Matrix<double, 4, 4> > LB;
-	double d_g, penalty, d_g_c, predictor, corrector;
-	double pstep = 1.0, dstep = 1.0;
+Eigen::Vector4d SolveMikiObjective() {
+    lampar::Miki<lampar::SingleMaterial, false> feasibility(1.0);
 
-	g(0) = 1;
-	g(1) = 0;
-	g(2) = 0;
-	g(3) = 0;
-    x = Eigen::Matrix<double, 4, 1>::Zero();
-    int iter = 0;
-	//feasibility.Initialise(x, X);
-    do
-    {
-		dx = -g; B = Eigen::Matrix<double, 4, 4>::Zero();
-		d_g = feasibility.DualityGap();
-		penalty = d_g/3.0;
-		predictor = SDPA::Parameter<>::Predictor_Duality_Reduction();
-		feasibility.CalculateResiduals(dx,predictor*penalty);
-		feasibility.Hessian(B);
-		//std::cout << "Hessian: "<< std::endl << B << std::endl;
-		LB = B.llt();
-		LB.solveInPlace(dx);
-		//std::cout << "predictor increment: " << std::endl << dx.transpose() << std::endl;
-		feasibility.UpdateIncrements(dx);
-		d_g_c = feasibility.DualityGap();
-		corrector = SDPA::Parameter<>::Corrector_Duality_Reduction(d_g,d_g_c);
-		dx = -g;
-		feasibility.CalculateResiduals(dx,corrector*penalty);
-		//std::cout << "corrector residual: " << std::endl << dx.transpose() << std::endl;
-		LB.solveInPlace(dx);
-		std::cout << "correction factor: " << corrector << std::endl;
-		//std::cout << "corrector increment: " << std::endl << dx.transpose() << std::endl;
-		feasibility.UpdateIncrements(dx);
-		pstep = 1.0; dstep = 1.0;
-		feasibility.StepSize(pstep,dstep);
-		feasibility.UpdateVariables(pstep,dstep);
-		x += pstep*dx;
-		std::cout << "iteration: " << iter+1 << '\t' << pstep << '\t' << dstep << '\t' << d_g <<std::endl;
-	} while(d_g > 1.0e-10 and ++iter<20);
+    Eigen::Vector4d gradient;
+    gradient << 1.0, 0.0, 0.0, 0.0;
 
+    Eigen::Vector4d design = Eigen::Vector4d::Zero();
+    Eigen::Matrix4d hessian;
+    Eigen::LLT<Eigen::Matrix4d> factorisation;
 
-	std::cout <<"x = "<<x<<std::endl;
-	return 0;
+    double dualityGap = 0.0;
+    int iteration = 0;
+    do {
+        Eigen::Vector4d increment = -gradient;
+        hessian.setZero();
+
+        dualityGap = feasibility.DualityGap();
+        const double penalty = dualityGap / 3.0;
+        const double predictor = SDPA::Parameter<>::Predictor_Duality_Reduction();
+        feasibility.CalculateResiduals(increment, predictor * penalty);
+        feasibility.Hessian(hessian);
+        factorisation.compute(hessian);
+        factorisation.solveInPlace(increment);
+        feasibility.UpdateIncrements(increment);
+
+        const double correctedGap = feasibility.DualityGap();
+        const double corrector = SDPA::Parameter<>::Corrector_Duality_Reduction(dualityGap, correctedGap);
+
+        increment = -gradient;
+        feasibility.CalculateResiduals(increment, corrector * penalty);
+        factorisation.solveInPlace(increment);
+        feasibility.UpdateIncrements(increment);
+
+        double primalStep = 1.0;
+        double dualStep = 1.0;
+        feasibility.StepSize(primalStep, dualStep);
+        feasibility.UpdateVariables(primalStep, dualStep);
+        design += primalStep * increment;
+    } while (dualityGap > 1.0e-10 && ++iteration < 20);
+
+    return design;
 }
 
+}  // namespace
 
+TEST(MikiRegression, OptimisationOverTheMikiConeConvergesToKnownPoint) {
+    const Eigen::Vector4d design = SolveMikiObjective();
+
+    EXPECT_NEAR(design(0), -std::sqrt(2.0), 1.0e-5);
+    EXPECT_NEAR(design(1), 1.0, 1.0e-5);
+    EXPECT_NEAR(design(2), 0.0, 1.0e-7);
+    EXPECT_NEAR(design(3), 0.0, 1.0e-7);
+}
+
+int main(int argc, char** argv) {
+    testing::InitGoogleTest(&argc, argv);
+    return RUN_ALL_TESTS();
+}

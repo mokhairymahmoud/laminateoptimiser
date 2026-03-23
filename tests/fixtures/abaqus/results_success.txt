@@ -1,0 +1,5 @@
+objectives=1.25,0.50
+constraints=-0.10,-0.25
+objective_gradients=1.00,0.00;0.00,1.00
+constraint_gradients=-1.00,0.50;0.25,-0.75
+message=parsed successfully

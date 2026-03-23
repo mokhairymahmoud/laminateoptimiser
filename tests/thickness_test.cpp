@@ -1,68 +1,64 @@
-/*
- * thickness_test.cpp
- *
- *  Created on: 2 mai 2015
- *      Author: Ramzi
- */
-
-#include <iostream>
 #include "BoundSDP/boundSDP.hpp"
 
+#include <gtest/gtest.h>
 
-int main()
-{
-	lampar::boundSDP<lampar::Upper> feasibility_U(100);
-	lampar::boundSDP<lampar::Lower> feasibility_L(-100);
-	double g, dx, x;
-	double B;
+namespace {
 
+double SolveThicknessBoundProblem() {
+    lampar::boundSDP<lampar::Upper> upperBound(100.0);
+    lampar::boundSDP<lampar::Lower> lowerBound(-100.0);
 
-	double d_g, penalty, d_g_c, predictor, corrector;
-	double pstep = 1.0, dstep = 1.0;
+    double design = -40.0;
+    upperBound.Initialise(1.0, design);
+    lowerBound.Initialise(1.0, design);
 
-	x = -40;
-    int iter = 0;
-	feasibility_U.Initialise(1.0, x);
-	feasibility_L.Initialise(1.0, x);
-    do
-    {
-    	g = x*x-1*x-2;
-		dx = -g; B = 2*x-1;
-		d_g = feasibility_U.DualityGap()+feasibility_L.DualityGap();
-		penalty = d_g/2.0;
-		predictor = SDPA::Parameter<>::Predictor_Duality_Reduction();
-		feasibility_U.CalculateResiduals(dx,predictor*penalty);
-		feasibility_L.CalculateResiduals(dx,predictor*penalty);
-		feasibility_U.Hessian(B);
-		feasibility_L.Hessian(B);
-		//std::cout << "Hessian: "<< std::endl << B << std::endl;
-		dx = dx /B;
-		//std::cout << "predictor increment: " << std::endl << dx.transpose() << std::endl;
-		feasibility_U.UpdateIncrements(dx);
-		feasibility_L.UpdateIncrements(dx);
-		d_g_c = feasibility_U.DualityGap()+feasibility_L.DualityGap();
-		corrector = SDPA::Parameter<>::Corrector_Duality_Reduction(d_g,d_g_c);
-		dx = -g;
-		feasibility_U.CalculateResiduals(dx,corrector*penalty);
-		feasibility_L.CalculateResiduals(dx,corrector*penalty);
-		//std::cout << "corrector residual: " << std::endl << dx.transpose() << std::endl;
-		dx = dx /B;
-		std::cout << "correction factor: " << corrector << std::endl;
-		//std::cout << "corrector increment: " << std::endl << dx.transpose() << std::endl;
-		feasibility_U.UpdateIncrements(dx);
-		feasibility_L.UpdateIncrements(dx);
-		pstep = 1.0; dstep = 1.0;
-		feasibility_U.StepSize(pstep,dstep);
-		feasibility_L.StepSize(pstep,dstep);
-		feasibility_U.UpdateVariables(pstep,dstep);
-		feasibility_L.UpdateVariables(pstep,dstep);
-		x += pstep*dx;
-		std::cout << "iteration: " << iter+1 << '\t' << pstep << '\t' << dstep << '\t' << d_g <<std::endl;
-	} while(d_g > 1.0e-10 and ++iter<20);
+    double dualityGap = 0.0;
+    int iteration = 0;
+    do {
+        const double response = design * design - design - 2.0;
+        double increment = -response;
+        double hessian = 2.0 * design - 1.0;
 
+        dualityGap = upperBound.DualityGap() + lowerBound.DualityGap();
+        const double penalty = dualityGap / 2.0;
+        const double predictor = SDPA::Parameter<>::Predictor_Duality_Reduction();
+        upperBound.CalculateResiduals(increment, predictor * penalty);
+        lowerBound.CalculateResiduals(increment, predictor * penalty);
+        upperBound.Hessian(hessian);
+        lowerBound.Hessian(hessian);
+        increment /= hessian;
+        upperBound.UpdateIncrements(increment);
+        lowerBound.UpdateIncrements(increment);
 
-	std::cout <<"x = "<<x<<std::endl;
-	return 0;
+        const double correctedGap = upperBound.DualityGap() + lowerBound.DualityGap();
+        const double corrector = SDPA::Parameter<>::Corrector_Duality_Reduction(dualityGap, correctedGap);
+
+        increment = -response;
+        upperBound.CalculateResiduals(increment, corrector * penalty);
+        lowerBound.CalculateResiduals(increment, corrector * penalty);
+        increment /= hessian;
+        upperBound.UpdateIncrements(increment);
+        lowerBound.UpdateIncrements(increment);
+
+        double primalStep = 1.0;
+        double dualStep = 1.0;
+        upperBound.StepSize(primalStep, dualStep);
+        lowerBound.StepSize(primalStep, dualStep);
+        upperBound.UpdateVariables(primalStep, dualStep);
+        lowerBound.UpdateVariables(primalStep, dualStep);
+        design += primalStep * increment;
+    } while (dualityGap > 1.0e-10 && ++iteration < 20);
+
+    return design;
 }
 
+}  // namespace
 
+TEST(ThicknessRegression, BoundConstrainedScalarProblemConvergesToKnownRoot) {
+    EXPECT_NEAR(SolveThicknessBoundProblem(), -1.0, 1.0e-6);
+}
+
+int main(int argc, char** argv) {
+    testing::InitGoogleTest(&argc, argv);
+    return RUN_ALL_TESTS();
+}
