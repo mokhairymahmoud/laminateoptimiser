@@ -1,6 +1,6 @@
 set(ACTIVE_TEST_FILES
     Miki_test.cpp
-    abaqus_backend_test.cpp
+    calculix_backend_test.cpp
     dampingUtils_test.cpp
     global_driver_test.cpp
     lamination_parameter_derivatives_test.cpp

@@ -1,4 +1,4 @@
-#include "../src/OptimisationPipeline/abaqusJobBackend.hpp"
+#include "../src/OptimisationPipeline/calculixJobBackend.hpp"
 
 #include <gtest/gtest.h>
 
@@ -26,13 +26,13 @@ std::filesystem::path WriteTemplate(const std::filesystem::path& directory) {
 
 }  // namespace
 
-TEST(AbaqusBackendTest, BackendRendersParametersAndParsesResults) {
-    const std::filesystem::path tempDirectory = TempPath("abaqus_success");
+TEST(CalculixBackendTest, BackendRendersParametersAndParsesResults) {
+    const std::filesystem::path tempDirectory = TempPath("calculix_success");
     const std::filesystem::path templatePath = WriteTemplate(tempDirectory);
     const std::filesystem::path fixturePath =
         std::filesystem::path(__FILE__).parent_path() / "fixtures/abaqus/results_success.txt";
 
-    lamopt::AbaqusJobConfig config;
+    lamopt::CalculixJobConfig config;
     config.templateInputPath = templatePath;
     config.renderedInputFilename = "job.inp";
     config.resultFilename = "analysis_results.txt";
@@ -40,7 +40,7 @@ TEST(AbaqusBackendTest, BackendRendersParametersAndParsesResults) {
     config.parameterMappings = {{"{{X0}}", 0}, {"{{X1}}", 1}};
     config.scratchRoot = tempDirectory;
 
-    lamopt::AbaqusJobBackend backend(config);
+    lamopt::CalculixJobBackend backend(config);
 
     lamopt::AnalysisRequest request;
     request.designVariables = Eigen::Vector2d(1.5, -2.5);
@@ -50,6 +50,7 @@ TEST(AbaqusBackendTest, BackendRendersParametersAndParsesResults) {
     const lamopt::AnalysisResult result = backend.evaluate(request);
 
     ASSERT_TRUE(result.isSuccessful());
+    EXPECT_EQ(result.diagnostics.backendName, "CalculixJobBackend");
     EXPECT_EQ(result.objectives.size(), 2);
     EXPECT_EQ(result.constraints.size(), 2);
     ASSERT_TRUE(result.objectiveGradients.has_value());
@@ -65,16 +66,40 @@ TEST(AbaqusBackendTest, BackendRendersParametersAndParsesResults) {
     EXPECT_NE(contents.find("-2.5000000000000000e+00"), std::string::npos);
 }
 
-TEST(AbaqusBackendTest, BackendReportsCommandFailure) {
-    const std::filesystem::path tempDirectory = TempPath("abaqus_failure");
+TEST(CalculixBackendTest, BackendUsesCalculixDefaultRunDirectoryWhenUnset) {
+    const std::filesystem::path tempDirectory = TempPath("calculix_default_run_dir");
+    const std::filesystem::path templatePath = WriteTemplate(tempDirectory);
+    const std::filesystem::path fixturePath =
+        std::filesystem::path(__FILE__).parent_path() / "fixtures/abaqus/results_success.txt";
+
+    lamopt::CalculixJobConfig config;
+    config.templateInputPath = templatePath;
+    config.launchCommandTemplate = "cp " + fixturePath.string() + " {result_file}";
+    config.parameterMappings = {{"{{X0}}", 0}, {"{{X1}}", 1}};
+    config.scratchRoot = tempDirectory;
+
+    lamopt::CalculixJobBackend backend(config);
+
+    lamopt::AnalysisRequest request;
+    request.designVariables = Eigen::Vector2d(1.0, 2.0);
+
+    const lamopt::AnalysisResult result = backend.evaluate(request);
+
+    ASSERT_TRUE(result.isSuccessful());
+    EXPECT_EQ(result.diagnostics.runDirectory, tempDirectory / "calculix_job");
+    EXPECT_TRUE(std::filesystem::exists(tempDirectory / "calculix_job" / "job.inp"));
+}
+
+TEST(CalculixBackendTest, BackendReportsCommandFailure) {
+    const std::filesystem::path tempDirectory = TempPath("calculix_failure");
     const std::filesystem::path templatePath = WriteTemplate(tempDirectory);
 
-    lamopt::AbaqusJobConfig config;
+    lamopt::CalculixJobConfig config;
     config.templateInputPath = templatePath;
     config.launchCommandTemplate = "exit 3";
     config.scratchRoot = tempDirectory;
 
-    lamopt::AbaqusJobBackend backend(config);
+    lamopt::CalculixJobBackend backend(config);
 
     lamopt::AnalysisRequest request;
     request.designVariables = Eigen::VectorXd::Constant(1, 1.0);
@@ -86,17 +111,17 @@ TEST(AbaqusBackendTest, BackendReportsCommandFailure) {
     EXPECT_EQ(result.diagnostics.exitCode, 3);
 }
 
-TEST(AbaqusBackendTest, BackendReportsTimeout) {
-    const std::filesystem::path tempDirectory = TempPath("abaqus_timeout");
+TEST(CalculixBackendTest, BackendReportsTimeout) {
+    const std::filesystem::path tempDirectory = TempPath("calculix_timeout");
     const std::filesystem::path templatePath = WriteTemplate(tempDirectory);
 
-    lamopt::AbaqusJobConfig config;
+    lamopt::CalculixJobConfig config;
     config.templateInputPath = templatePath;
     config.launchCommandTemplate = "sleep 1";
     config.timeout = std::chrono::milliseconds(100);
     config.scratchRoot = tempDirectory;
 
-    lamopt::AbaqusJobBackend backend(config);
+    lamopt::CalculixJobBackend backend(config);
 
     lamopt::AnalysisRequest request;
     request.designVariables = Eigen::VectorXd::Constant(1, 1.0);

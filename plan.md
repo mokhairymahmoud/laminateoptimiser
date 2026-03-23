@@ -4,8 +4,8 @@ This file tracks the implementation roadmap for the cleaned project structure.
 
 Important constraint:
 
-- Abaqus is a response engine and optional native gradient source
-- Abaqus is not assumed to provide lamination-parameter sensitivities
+- The external FE solver is a response engine and optional native gradient source
+- The FE solver is not assumed to provide lamination-parameter sensitivities
 
 Status legend:
 
@@ -90,28 +90,38 @@ Status legend:
   - bound constraints
   - current status: the direct core laminate adapter already does this for the cleaned single-objective linearized laminate path
   - remaining work: broaden that path beyond the current objective/approximation shape
-- `[~]` Make the lamination-parameter mapping and derivative path explicit on our side of the architecture rather than relying on Abaqus-native gradients.
+- `[~]` Make the lamination-parameter mapping and derivative path explicit on our side of the architecture rather than relying on solver-native gradients.
   - current status: optimiser-owned lamination-parameter derivative interfaces now exist in the pipeline
   - current status: assembled laminate response terms can now mix dense design contributions with laminate-section contributions
   - current status: the driver now merges masked backend gradients, optimiser-side laminate gradients, and finite-difference fallback in one recovery path
   - remaining work: connect the assembled response terms to the real FE response quantities extracted for active runs
 
-## Phase 5: Abaqus Job-Wrapper Backend
+## Phase 5: CalculiX-First FE Job-Wrapper Backend
 
-- `[x]` Add a concrete Abaqus-style job-wrapper backend.
+- `[~]` Refactor the concrete job-wrapper backend around a solver-neutral file/job runner.
+  - current status: common template rendering, command execution, timeout handling, and result parsing now live in a shared job backend layer
+  - current status: Abaqus remains available through a compatibility wrapper while the integration is being migrated
+  - current status: a CalculiX-specific backend wrapper now exists and is the intended active FE entry point
+  - remaining work: move the orchestration and project configuration to instantiate CalculiX by default
 - `[x]` Support template input rendering from optimisation variables.
 - `[x]` Support isolated run directories.
 - `[x]` Support external command execution.
 - `[x]` Support timeout and failure reporting.
 - `[x]` Support parsing result files into `AnalysisResult`.
-- `[x]` Treat Abaqus-native gradients as optional backend output, not as a required capability.
+- `[x]` Treat solver-native gradients as optional backend output, not as a required capability.
 - `[x]` Add backend tests for:
   - parameter injection
   - result parsing
   - command failure
   - timeout handling
-- `[ ]` Implement project-specific Abaqus deck generation and real result extraction for the actual FE models used by this project.
-- `[ ]` Decide which real Abaqus runs, if any, will provide native sensitivities and which will rely on the optimiser-side/fallback sensitivity path instead.
+- `[ ]` Implement project-specific CalculiX deck generation and real result extraction for the actual FE models used by this project.
+- `[ ]` Add CalculiX result extraction for the objective and constraint quantities needed by the active approximation pipeline.
+- `[ ]` Add a materialized launch path for local CalculiX runs on developer machines:
+  - discover or configure the `ccx` executable
+  - set job naming and working-directory conventions
+  - capture stdout/stderr into run diagnostics
+- `[ ]` Decide which real CalculiX runs, if any, will provide native sensitivities and which will rely on the optimiser-side/fallback sensitivity path instead.
+- `[ ]` Keep Abaqus support optional and compatibility-only until there is a concrete need to maintain dual-solver production flows.
 
 ## Phase 6: Sensitivities, Fallbacks, and Production Readiness
 
@@ -120,31 +130,35 @@ Status legend:
 - `[x]` Keep fallback gradients configurable rather than always-on.
 - `[x]` Add structured iteration history suitable for diagnostics.
 - `[x]` Add basic checkpoint file writing.
-- `[~]` Implement the production lamination-parameter sensitivity path outside Abaqus native gradient support.
+- `[~]` Implement the production lamination-parameter sensitivity path outside solver-native gradient support.
   - current status: optimiser-side laminate derivative providers are now plumbed into gradient recovery before finite differences
   - current status: regression coverage now exercises complete-model recovery and mixed backend-plus-laminate gradient assembly on small laminate benchmarks
   - remaining work: replace the in-test response assembly with the production laminate derivative chain driven by real FE response extraction
 - `[ ]` Add restart/resume from checkpoint into the active driver flow.
 - `[ ]` Add richer production logging/output formats.
-- `[ ]` Add failure summaries and diagnostics tailored to real Abaqus runs.
+- `[ ]` Add failure summaries and diagnostics tailored to real CalculiX runs.
 
 ## Current Snapshot
 
 - `[x]` The repository has been reduced to the active optimisation architecture.
 - `[x]` The build now compiles only active modules and active regression tests.
-- `[x]` The active orchestration layer, Abaqus backend skeleton, and core solver bridges all build and test together.
+- `[~]` The active orchestration layer, shared job backend layer, and core solver bridges build together while the FE wrapper is being migrated from Abaqus-first to CalculiX-first.
 - `[~]` The core laminate route is in place with shared orchestration-owned section binding helpers, but fallback/projection paths do not all reuse the same helper layer yet.
 - `[x]` Reusable laminate section binding helpers exist in the orchestration layer.
 - `[x]` Supported laminate problems now use the direct core laminate route by default, with projection kept as fallback.
-- `[~]` The architecture correctly treats Abaqus gradients as optional, and the optimiser-side lamination-parameter derivative path now supports assembled response terms plus partial-gradient merging, but the production derivative chain is still unfinished.
+- `[~]` The architecture correctly treats solver-native gradients as optional, and the optimiser-side lamination-parameter derivative path now supports assembled response terms plus partial-gradient merging, but the production derivative chain is still unfinished.
 
 ## Next Implementation Step
 
-- `[ ]` Bind the assembled optimiser-side laminate response terms to the real FE-facing response extraction path.
+- `[ ]` Make the CalculiX backend the default FE-facing path and bind the assembled optimiser-side laminate response terms to the real result extraction path.
 
 Concretely:
 
-1. define where active FE runs expose the laminate-dependent objective and constraint quantities needed by the assembled response model
-2. build the production response-term assembly from those extracted quantities instead of constructing benchmark terms in tests
-3. keep masked backend/native gradients, optimiser-side laminate terms, and finite-difference fallback interoperable for unsupported pieces
-4. add regression coverage around the real FE-facing assembly once that extraction contract is defined
+1. define the CalculiX run contract:
+   - input deck templating conventions
+   - result-file locations
+   - objective/constraint extraction format
+2. switch orchestration/configuration to construct CalculiX-backed analysis runs by default
+3. build the production response-term assembly from CalculiX-extracted quantities instead of constructing benchmark terms in tests
+4. keep masked backend/native gradients, optimiser-side laminate terms, and finite-difference fallback interoperable for unsupported pieces
+5. add regression coverage around the real CalculiX-facing extraction and assembly path once that contract is defined
