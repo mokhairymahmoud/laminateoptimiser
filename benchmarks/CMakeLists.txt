@@ -1,5 +1,6 @@
 set(ACTIVE_BENCHMARK_FILES
     calculix_e2e_test.cpp
+    calculix_composipy_benchmark_test.cpp
 )
 
 foreach(benchmark_file ${ACTIVE_BENCHMARK_FILES})

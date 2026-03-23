@@ -19,6 +19,56 @@ enum class AnalysisStatus {
     MissingGradients
 };
 
+enum class ResponseSensitivitySource {
+    Unspecified,
+    BackendNative,
+    OptimiserSideLaminate,
+    FiniteDifference
+};
+
+struct ResponseSensitivityPolicy {
+    std::vector<ResponseSensitivitySource> objectiveSources;
+    std::vector<ResponseSensitivitySource> constraintSources;
+};
+
+inline std::string ResponseSensitivitySourceToString(ResponseSensitivitySource source) {
+    switch (source) {
+        case ResponseSensitivitySource::Unspecified:
+            return "unspecified";
+        case ResponseSensitivitySource::BackendNative:
+            return "backend_native";
+        case ResponseSensitivitySource::OptimiserSideLaminate:
+            return "optimiser_side_laminate";
+        case ResponseSensitivitySource::FiniteDifference:
+            return "finite_difference";
+    }
+    return "unknown";
+}
+
+inline std::string DescribeResponseSensitivityPolicy(const ResponseSensitivityPolicy& policy) {
+    std::string description;
+
+    for (std::size_t index = 0; index < policy.objectiveSources.size(); ++index) {
+        if (!description.empty()) {
+            description += "; ";
+        }
+        description += "objective[" + std::to_string(index) + "]=";
+        description += ResponseSensitivitySourceToString(policy.objectiveSources[index]);
+    }
+    for (std::size_t index = 0; index < policy.constraintSources.size(); ++index) {
+        if (!description.empty()) {
+            description += "; ";
+        }
+        description += "constraint[" + std::to_string(index) + "]=";
+        description += ResponseSensitivitySourceToString(policy.constraintSources[index]);
+    }
+
+    if (description.empty()) {
+        return "no_response_sensitivity_policy";
+    }
+    return description;
+}
+
 struct AnalysisDiagnostics {
     std::string backendName;
     std::string message;
@@ -56,6 +106,7 @@ struct AnalysisResult {
     Eigen::VectorXd objectives;
     Eigen::VectorXd constraints;
     NamedScalarResponseMap extractedScalarValues;
+    std::optional<ResponseSensitivityPolicy> sensitivityPolicy;
     std::optional<Eigen::MatrixXd> objectiveGradients;
     std::optional<Eigen::MatrixXi> objectiveGradientMask;
     std::optional<Eigen::MatrixXd> constraintGradients;
@@ -77,6 +128,12 @@ struct AnalysisResult {
 
     [[nodiscard]] bool hasAllGradients() const {
         return hasObjectiveGradients() && hasConstraintGradients();
+    }
+
+    [[nodiscard]] bool hasConsistentSensitivityPolicy() const {
+        return !sensitivityPolicy.has_value()
+            || (sensitivityPolicy->objectiveSources.size() == static_cast<std::size_t>(objectives.size())
+                && sensitivityPolicy->constraintSources.size() == static_cast<std::size_t>(constraints.size()));
     }
 
 private:

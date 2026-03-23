@@ -46,6 +46,24 @@ private:
     bool m_provideGradients = true;
 };
 
+class PolicyAwarePartialGradientBackend final : public lamopt::AnalysisBackend {
+public:
+    lamopt::AnalysisResult evaluate(const lamopt::AnalysisRequest& request) override {
+        lamopt::AnalysisResult result;
+        result.status = lamopt::AnalysisStatus::Success;
+        result.objectives = Eigen::VectorXd::Constant(1, request.designVariables(0));
+        result.constraints = Eigen::VectorXd::Constant(1, request.designVariables(0) - 2.0);
+        result.objectiveGradients = Eigen::MatrixXd::Constant(1, 1, 1.0);
+        result.objectiveGradientMask = Eigen::MatrixXi::Ones(1, 1);
+        result.sensitivityPolicy = lamopt::ResponseSensitivityPolicy{
+            {lamopt::ResponseSensitivitySource::BackendNative},
+            {lamopt::ResponseSensitivitySource::FiniteDifference}
+        };
+        result.diagnostics.message = "policy-aware backend";
+        return result;
+    }
+};
+
 class ScriptedSolver final : public lamopt::SubproblemSolver {
 public:
     lamopt::SubproblemResult solve(const lamopt::ApproximationProblem& problem) override {
@@ -201,6 +219,30 @@ TEST(GlobalDriverTest, DriverUsesFiniteDifferenceFallbackWhenGradientsAreMissing
     EXPECT_TRUE(result.converged);
     EXPECT_TRUE(result.analysis.hasAllGradients());
     EXPECT_GT(backend.evaluationCount, 3);
+}
+
+TEST(GlobalDriverTest, DriverReportsConfiguredSensitivityPolicyWhenFallbackIsDisabled) {
+    PolicyAwarePartialGradientBackend backend;
+    lamopt::LinearApproximationBuilder approximationBuilder;
+    lamopt::GradientPenaltySubproblemSolver subproblemSolver({4.0, 5.0, 1.0e-12});
+
+    lamopt::DriverOptions options;
+    options.maxOuterIterations = 12;
+    options.maxSubIterations = 4;
+    options.requestSensitivities = true;
+    options.gradientFallbackMode = lamopt::GradientFallbackMode::Disabled;
+
+    lamopt::GlobalOptimisationDriver driver(backend, approximationBuilder, subproblemSolver, options);
+
+    lamopt::AnalysisRequest request;
+    request.designVariables = Eigen::VectorXd::Constant(1, 1.0);
+    request.workDirectory = TempPath("driver_policy_disabled");
+
+    const lamopt::GlobalOptimisationResult result = driver.optimise(request);
+
+    EXPECT_EQ(result.analysis.status, lamopt::AnalysisStatus::MissingGradients);
+    EXPECT_NE(result.analysis.diagnostics.message.find("Configured sensitivity policy: objective[0]=backend_native; constraint[0]=finite_difference."),
+              std::string::npos);
 }
 
 TEST(GlobalDriverTest, DriverRejectsNonImprovingCandidateAndIncreasesDamping) {

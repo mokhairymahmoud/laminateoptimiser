@@ -113,17 +113,20 @@ Status legend:
   - result parsing
   - command failure
   - timeout handling
-- `[ ]` Implement project-specific CalculiX deck generation and real result extraction for the actual FE models used by this project.
-- `[~]` Add CalculiX result extraction for the objective and constraint quantities needed by the active approximation pipeline.
-  - current status: `CalculixJobBackend` can now extract ordered objective and constraint scalars from CalculiX text outputs using configured regex rules and emit the normal backend result contract
-  - current status: the backend can also assemble objective and constraint responses from named raw CalculiX quantities through a response-schema layer suitable for `mass`, `buckling_lambda_1`, and `tip_u3` style contracts
-  - current status: a reusable benchmark response helper now defines a concrete buckling-oriented contract on top of that schema layer
-  - remaining work: replace fixture-driven extraction rules with the actual project response definitions and solver output files used by this laminate workflow
+- `[x]` Implement project-specific CalculiX deck generation and real result extraction for the actual FE models used by this project.
+- `[x]` Add CalculiX result extraction for the objective and constraint quantities needed by the active approximation pipeline.
+  - current status: the repo now contains a concrete CalculiX Composipy benchmark plate deck generator with real composite shell, static displacement, and buckling steps
+  - current status: the backend now extracts `buckling_lambda_1` and `tip_u3` from actual CalculiX `.dat` output for that benchmark and assembles benchmark responses around them
+  - current status: end-to-end regression coverage now exercises the real benchmark run path when a local `ccx` executable is available
 - `[x]` Add a materialized launch path for local CalculiX runs on developer machines:
   - discover or configure the `ccx` executable
   - set job naming and working-directory conventions
   - capture stdout/stderr into run diagnostics
-- `[ ]` Decide which real CalculiX runs, if any, will provide native sensitivities and which will rely on the optimiser-side/fallback sensitivity path instead.
+- `[x]` Decide which real CalculiX runs, if any, will provide native sensitivities and which will rely on the optimiser-side/fallback sensitivity path instead.
+  - current status: the active Composipy benchmark now declares an explicit response sensitivity policy
+  - current status: `mass_per_area` uses backend-native analytic sensitivities
+  - current status: `buckling_margin` and `tip_displacement_margin` are explicitly routed through finite-difference fallback for this benchmark
+  - current status: the driver now surfaces the configured policy when gradients remain incomplete and fallback is disabled
 - `[x]` Keep Abaqus support optional and compatibility-only until there is a concrete need to maintain dual-solver production flows.
 
 ## Phase 6: Sensitivities, Fallbacks, and Production Readiness
@@ -150,15 +153,8 @@ Status legend:
 - `[x]` The core laminate route is in place with shared orchestration-owned section binding helpers across both direct and fallback laminate paths.
 - `[x]` Reusable laminate section binding helpers exist in the orchestration layer.
 - `[x]` Supported laminate problems now use the direct core laminate route by default, with projection kept as fallback.
-- `[~]` The architecture correctly treats solver-native gradients as optional, and the optimiser-side lamination-parameter derivative path now supports assembled response terms plus partial-gradient merging, but the production derivative chain is still unfinished.
+- `[~]` The architecture correctly treats solver-native gradients as optional, and the optimiser-side lamination-parameter derivative path now supports assembled response terms plus partial-gradient merging, while the active Composipy benchmark now declares an explicit native-vs-fallback sensitivity policy, but the production laminate derivative chain is still unfinished.
 
 ## Next Implementation Step
 
-- `[ ]` Bind the assembled optimiser-side laminate response terms to the actual project-specific CalculiX response files and extraction rules.
-
-Concretely:
-
-1. define the actual project response files and regex extraction rules for the laminate workflow
-2. build the production response-term assembly from those CalculiX-extracted quantities instead of constructing benchmark terms in tests
-3. keep masked backend/native gradients, optimiser-side laminate terms, and finite-difference fallback interoperable for unsupported pieces
-4. add regression coverage around the real project CalculiX extraction and assembly path
+- `[ ]` Replace the in-test assembled laminate derivative model with a production laminate derivative chain driven by the real FE quantities extracted for active runs.

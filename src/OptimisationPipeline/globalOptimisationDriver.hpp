@@ -205,6 +205,11 @@ private:
             return baseResult;
         }
 
+        if (baseResult.sensitivityPolicy.has_value() && !baseResult.hasConsistentSensitivityPolicy()) {
+            appendDiagnosticMessage(baseResult.diagnostics.message,
+                                    "Response sensitivity policy does not match the objective/constraint counts.");
+        }
+
         attachOptimiserSideLaminateGradients(request, baseResult);
         if (baseResult.hasAllGradients()) {
             return baseResult;
@@ -212,6 +217,13 @@ private:
 
         if (m_options.gradientFallbackMode != GradientFallbackMode::FiniteDifference) {
             baseResult.status = AnalysisStatus::MissingGradients;
+            if (baseResult.sensitivityPolicy.has_value()) {
+                appendDiagnosticMessage(
+                    baseResult.diagnostics.message,
+                    "Configured sensitivity policy: "
+                        + DescribeResponseSensitivityPolicy(*baseResult.sensitivityPolicy) + "."
+                );
+            }
             appendDiagnosticMessage(baseResult.diagnostics.message,
                                     "Analysis backend returned incomplete gradients and finite-difference fallback is disabled.");
             return baseResult;
