@@ -17,6 +17,7 @@
 
 #if defined(__APPLE__) || defined(__unix__)
 #include <csignal>
+#include <fcntl.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <thread>
@@ -39,6 +40,9 @@ struct JobBackendConfig {
     std::filesystem::path scratchRoot;
     std::chrono::milliseconds timeout{0};
     int maxRetries = 0;
+    bool launchInRunDirectory = false;
+    std::optional<std::filesystem::path> standardOutputFilename;
+    std::optional<std::filesystem::path> standardErrorFilename;
     std::string backendName = "ExternalJobBackend";
     std::string defaultRunDirectoryName = "external_job";
 };
@@ -66,6 +70,16 @@ public:
 
         const std::filesystem::path renderedInputPath = runDirectory / m_config.renderedInputFilename;
         const std::filesystem::path resultPath = runDirectory / m_config.resultFilename;
+        const std::optional<std::filesystem::path> standardOutputPath =
+            m_config.standardOutputFilename.has_value()
+            ? std::optional<std::filesystem::path>(runDirectory / *m_config.standardOutputFilename)
+            : std::nullopt;
+        const std::optional<std::filesystem::path> standardErrorPath =
+            m_config.standardErrorFilename.has_value()
+            ? std::optional<std::filesystem::path>(runDirectory / *m_config.standardErrorFilename)
+            : std::nullopt;
+        result.diagnostics.standardOutputPath = standardOutputPath.value_or(std::filesystem::path());
+        result.diagnostics.standardErrorPath = standardErrorPath.value_or(std::filesystem::path());
 
         try {
             renderTemplate(request.designVariables, renderedInputPath);
@@ -82,7 +96,14 @@ public:
             result.diagnostics.command = command;
             result.diagnostics.runDirectory = runDirectory;
 
-            const CommandExecution commandExecution = runCommand(command, m_config.timeout, backendName());
+            const CommandExecution commandExecution = runCommand(
+                command,
+                m_config.timeout,
+                backendName(),
+                m_config.launchInRunDirectory ? runDirectory : std::filesystem::path(),
+                standardOutputPath,
+                standardErrorPath
+            );
             result.diagnostics.exitCode = commandExecution.exitCode;
             result.diagnostics.attempts = attempts + 1;
 
@@ -179,6 +200,19 @@ private:
         }
     }
 
+    [[nodiscard]] static std::string shellQuote(const std::string& value) {
+        std::string quoted = "'";
+        for (const char character : value) {
+            if (character == '\'') {
+                quoted += "'\\''";
+            } else {
+                quoted += character;
+            }
+        }
+        quoted += "'";
+        return quoted;
+    }
+
     [[nodiscard]] static AnalysisResult parseResultFile(const std::filesystem::path& resultPath,
                                                         const AnalysisDiagnostics& diagnostics,
                                                         const std::string& backendName) {
@@ -268,7 +302,10 @@ private:
 
     [[nodiscard]] static CommandExecution runCommand(const std::string& command,
                                                      std::chrono::milliseconds timeout,
-                                                     const std::string& backendName) {
+                                                     const std::string& backendName,
+                                                     const std::filesystem::path& workingDirectory,
+                                                     const std::optional<std::filesystem::path>& standardOutputPath,
+                                                     const std::optional<std::filesystem::path>& standardErrorPath) {
 #if defined(__APPLE__) || defined(__unix__)
         CommandExecution result;
         pid_t pid = fork();
@@ -280,6 +317,25 @@ private:
 
         if (pid == 0) {
             setpgid(0, 0);
+            if (!workingDirectory.empty()) {
+                chdir(workingDirectory.c_str());
+            }
+            if (standardOutputPath.has_value()) {
+                const int stdoutFd = open(standardOutputPath->c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                if (stdoutFd < 0) {
+                    _exit(126);
+                }
+                dup2(stdoutFd, STDOUT_FILENO);
+                close(stdoutFd);
+            }
+            if (standardErrorPath.has_value()) {
+                const int stderrFd = open(standardErrorPath->c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                if (stderrFd < 0) {
+                    _exit(126);
+                }
+                dup2(stderrFd, STDERR_FILENO);
+                close(stderrFd);
+            }
             execl("/bin/sh", "sh", "-lc", command.c_str(), static_cast<char*>(nullptr));
             _exit(127);
         }
@@ -323,7 +379,19 @@ private:
         return result;
 #else
         (void)timeout;
-        const int exitCode = std::system(command.c_str());
+        std::string shellCommand;
+        if (!workingDirectory.empty()) {
+            shellCommand += "cd " + shellQuote(workingDirectory.string()) + " && ";
+        }
+        shellCommand += command;
+        if (standardOutputPath.has_value()) {
+            shellCommand += " > " + shellQuote(standardOutputPath->string());
+        }
+        if (standardErrorPath.has_value()) {
+            shellCommand += " 2> " + shellQuote(standardErrorPath->string());
+        }
+
+        const int exitCode = std::system(shellCommand.c_str());
         CommandExecution result;
         result.exitCode = exitCode;
         result.status = exitCode == 0 ? AnalysisStatus::Success : AnalysisStatus::BackendFailure;

@@ -22,6 +22,8 @@ struct AnalysisDiagnostics {
     std::string message;
     std::string command;
     std::filesystem::path runDirectory;
+    std::filesystem::path standardOutputPath;
+    std::filesystem::path standardErrorPath;
     int exitCode = 0;
     int attempts = 0;
 };

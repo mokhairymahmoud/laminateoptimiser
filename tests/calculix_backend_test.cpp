@@ -24,6 +24,37 @@ std::filesystem::path WriteTemplate(const std::filesystem::path& directory) {
     return templatePath;
 }
 
+class ScopedEnvironmentVariable {
+public:
+    ScopedEnvironmentVariable(const char* name, const char* value)
+        : m_name(name) {
+        const char* current = std::getenv(name);
+        if (current != nullptr) {
+            m_hadValue = true;
+            m_originalValue = current;
+        }
+
+        if (value != nullptr) {
+            setenv(name, value, 1);
+        } else {
+            unsetenv(name);
+        }
+    }
+
+    ~ScopedEnvironmentVariable() {
+        if (m_hadValue) {
+            setenv(m_name.c_str(), m_originalValue.c_str(), 1);
+        } else {
+            unsetenv(m_name.c_str());
+        }
+    }
+
+private:
+    std::string m_name;
+    bool m_hadValue = false;
+    std::string m_originalValue;
+};
+
 }  // namespace
 
 TEST(CalculixBackendTest, BackendRendersParametersAndParsesResults) {
@@ -66,6 +97,29 @@ TEST(CalculixBackendTest, BackendRendersParametersAndParsesResults) {
     EXPECT_NE(contents.find("-2.5000000000000000e+00"), std::string::npos);
 }
 
+TEST(CalculixBackendTest, DefaultConfigUsesResolvedExecutableAndLogCapture) {
+    ScopedEnvironmentVariable lamoptExecutable("LAMOPT_CCX_EXECUTABLE", "/opt/calculix/bin/ccx-custom");
+    ScopedEnvironmentVariable ccxExecutable("CCX", "/opt/calculix/bin/ccx-env");
+
+    const std::filesystem::path tempDirectory = TempPath("calculix_default_config");
+    const std::filesystem::path templatePath = WriteTemplate(tempDirectory);
+
+    const lamopt::CalculixJobConfig config = lamopt::MakeDefaultCalculixJobConfig({
+        templatePath,
+        tempDirectory,
+        {{"{{X0}}", 0}, {"{{X1}}", 1}}
+    });
+
+    EXPECT_EQ(config.templateInputPath, templatePath);
+    EXPECT_EQ(config.scratchRoot, tempDirectory);
+    EXPECT_EQ(config.launchCommandTemplate, "'/opt/calculix/bin/ccx-custom' -i {job_name}");
+    EXPECT_TRUE(config.launchInRunDirectory);
+    ASSERT_TRUE(config.standardOutputFilename.has_value());
+    ASSERT_TRUE(config.standardErrorFilename.has_value());
+    EXPECT_EQ(*config.standardOutputFilename, std::filesystem::path("ccx.stdout.log"));
+    EXPECT_EQ(*config.standardErrorFilename, std::filesystem::path("ccx.stderr.log"));
+}
+
 TEST(CalculixBackendTest, BackendUsesCalculixDefaultRunDirectoryWhenUnset) {
     const std::filesystem::path tempDirectory = TempPath("calculix_default_run_dir");
     const std::filesystem::path templatePath = WriteTemplate(tempDirectory);
@@ -88,6 +142,41 @@ TEST(CalculixBackendTest, BackendUsesCalculixDefaultRunDirectoryWhenUnset) {
     ASSERT_TRUE(result.isSuccessful());
     EXPECT_EQ(result.diagnostics.runDirectory, tempDirectory / "calculix_job");
     EXPECT_TRUE(std::filesystem::exists(tempDirectory / "calculix_job" / "job.inp"));
+}
+
+TEST(CalculixBackendTest, BackendRunsInsideRunDirectoryAndCapturesLogs) {
+    const std::filesystem::path tempDirectory = TempPath("calculix_logs");
+    const std::filesystem::path templatePath = WriteTemplate(tempDirectory);
+    const std::filesystem::path fixturePath =
+        std::filesystem::path(__FILE__).parent_path() / "fixtures/abaqus/results_success.txt";
+
+    lamopt::CalculixJobConfig config;
+    config.templateInputPath = templatePath;
+    config.launchCommandTemplate =
+        "pwd; cat missing.stderr.probe; cp " + fixturePath.string() + " {result_file}";
+    config.parameterMappings = {{"{{X0}}", 0}, {"{{X1}}", 1}};
+    config.scratchRoot = tempDirectory;
+
+    lamopt::CalculixJobBackend backend(config);
+
+    lamopt::AnalysisRequest request;
+    request.designVariables = Eigen::Vector2d(1.0, 2.0);
+
+    const lamopt::AnalysisResult result = backend.evaluate(request);
+
+    ASSERT_TRUE(result.isSuccessful());
+    ASSERT_FALSE(result.diagnostics.standardOutputPath.empty());
+    ASSERT_FALSE(result.diagnostics.standardErrorPath.empty());
+
+    std::ifstream stdoutFile(result.diagnostics.standardOutputPath);
+    std::stringstream stdoutBuffer;
+    stdoutBuffer << stdoutFile.rdbuf();
+    EXPECT_NE(stdoutBuffer.str().find((tempDirectory / "calculix_job").string()), std::string::npos);
+
+    std::ifstream stderrFile(result.diagnostics.standardErrorPath);
+    std::stringstream stderrBuffer;
+    stderrBuffer << stderrFile.rdbuf();
+    EXPECT_NE(stderrBuffer.str().find("missing.stderr.probe"), std::string::npos);
 }
 
 TEST(CalculixBackendTest, BackendReportsCommandFailure) {
