@@ -265,6 +265,75 @@ TEST(CalculixBackendTest, BackendCanExtractResponsesFromCalculixTextOutput) {
     EXPECT_TRUE(std::filesystem::exists(tempDirectory / "calculix_job" / "analysis_results.txt"));
 }
 
+TEST(CalculixBackendTest, BackendCanAssembleResponsesFromNamedCalculixSchema) {
+    const std::filesystem::path tempDirectory = TempPath("calculix_response_schema");
+    const std::filesystem::path templatePath = WriteTemplate(tempDirectory);
+    const std::filesystem::path fixturePath =
+        std::filesystem::path(__FILE__).parent_path() / "fixtures/calculix/results_sample.dat";
+
+    lamopt::CalculixJobConfig config;
+    config.templateInputPath = templatePath;
+    config.launchCommandTemplate = "cp " + fixturePath.string() + " {job_name}.dat";
+    config.parameterMappings = {{"{{X0}}", 0}, {"{{X1}}", 1}};
+    config.scratchRoot = tempDirectory;
+    config.rawScalarExtractions = {
+        {"mass",
+         {std::filesystem::path("{job_name}.dat"),
+          "TOTAL MASS\\s*=\\s*([-+0-9.Ee]+)",
+          1,
+          lamopt::CalculixMatchSelection::Last,
+          1.0,
+          0.0,
+          "mass"}},
+        {"buckling_lambda_1",
+         {std::filesystem::path("{job_name}.dat"),
+          "FAILURE INDEX\\s*=\\s*([-+0-9.Ee]+)",
+          1,
+          lamopt::CalculixMatchSelection::Last,
+          1.0,
+          0.0,
+          "buckling_lambda_1"}},
+        {"tip_u3",
+         {std::filesystem::path("{job_name}.dat"),
+          "TIP DISPLACEMENT\\s*=\\s*([-+0-9.Ee]+)",
+          1,
+          lamopt::CalculixMatchSelection::Last,
+          1000.0,
+          0.0,
+          "tip_u3_mm"}}
+    };
+    config.objectiveResponses = {
+        {"mass", lamopt::CalculixDerivedResponseTransform::Identity, 1.0, 0.0, "objective_mass"}
+    };
+    config.constraintResponses = {
+        {"buckling_lambda_1",
+         lamopt::CalculixDerivedResponseTransform::InverseAffine,
+         1.0,
+         -1.0,
+         "buckling_margin"},
+        {"tip_u3",
+         lamopt::CalculixDerivedResponseTransform::AbsoluteAffine,
+         1.0 / 3.0,
+         -1.0,
+         "tip_displacement_margin"}
+    };
+
+    lamopt::CalculixJobBackend backend(config);
+
+    lamopt::AnalysisRequest request;
+    request.designVariables = Eigen::Vector2d(1.0, 2.0);
+
+    const lamopt::AnalysisResult result = backend.evaluate(request);
+
+    ASSERT_TRUE(result.isSuccessful());
+    ASSERT_EQ(result.objectives.size(), 1);
+    ASSERT_EQ(result.constraints.size(), 2);
+    EXPECT_NEAR(result.objectives(0), 12.75, 1.0e-12);
+    EXPECT_NEAR(result.constraints(0), 1.0 / 0.92 - 1.0, 1.0e-12);
+    EXPECT_NEAR(result.constraints(1), 3.1 / 3.0 - 1.0, 1.0e-12);
+    EXPECT_EQ(result.diagnostics.message, "parsed from CalculiX response schema");
+}
+
 TEST(CalculixBackendTest, BackendReportsCommandFailure) {
     const std::filesystem::path tempDirectory = TempPath("calculix_failure");
     const std::filesystem::path templatePath = WriteTemplate(tempDirectory);

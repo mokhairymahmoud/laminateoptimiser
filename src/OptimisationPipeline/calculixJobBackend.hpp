@@ -24,7 +24,30 @@ struct CalculixTextScalarRule {
     std::string label;
 };
 
+struct CalculixNamedTextScalarRule {
+    std::string id;
+    CalculixTextScalarRule extraction;
+};
+
+enum class CalculixDerivedResponseTransform {
+    Identity,
+    Affine,
+    AbsoluteAffine,
+    InverseAffine
+};
+
+struct CalculixDerivedResponseRule {
+    std::string sourceId;
+    CalculixDerivedResponseTransform transform = CalculixDerivedResponseTransform::Identity;
+    double scale = 1.0;
+    double offset = 0.0;
+    std::string label;
+};
+
 struct CalculixJobConfig : JobBackendConfig {
+    std::vector<CalculixNamedTextScalarRule> rawScalarExtractions;
+    std::vector<CalculixDerivedResponseRule> objectiveResponses;
+    std::vector<CalculixDerivedResponseRule> constraintResponses;
     std::vector<CalculixTextScalarRule> objectiveExtractions;
     std::vector<CalculixTextScalarRule> constraintExtractions;
 
@@ -49,6 +72,9 @@ struct CalculixJobSetup {
     std::optional<std::filesystem::path> executablePath;
     std::optional<std::filesystem::path> standardOutputFilename = std::filesystem::path("ccx.stdout.log");
     std::optional<std::filesystem::path> standardErrorFilename = std::filesystem::path("ccx.stderr.log");
+    std::vector<CalculixNamedTextScalarRule> rawScalarExtractions;
+    std::vector<CalculixDerivedResponseRule> objectiveResponses;
+    std::vector<CalculixDerivedResponseRule> constraintResponses;
     std::vector<CalculixTextScalarRule> objectiveExtractions;
     std::vector<CalculixTextScalarRule> constraintExtractions;
 };
@@ -96,6 +122,9 @@ struct CalculixJobSetup {
     config.resultFilename = setup.resultFilename;
     config.standardOutputFilename = setup.standardOutputFilename;
     config.standardErrorFilename = setup.standardErrorFilename;
+    config.rawScalarExtractions = setup.rawScalarExtractions;
+    config.objectiveResponses = setup.objectiveResponses;
+    config.constraintResponses = setup.constraintResponses;
     config.objectiveExtractions = setup.objectiveExtractions;
     config.constraintExtractions = setup.constraintExtractions;
     config.launchCommandTemplate =
@@ -112,6 +141,34 @@ public:
 protected:
     AnalysisResult parseSuccessfulRun(const ExecutionPaths& paths,
                                       const AnalysisDiagnostics& diagnostics) const override {
+        if (usesResponseSchema()) {
+            try {
+                const std::unordered_map<std::string, double> rawValues =
+                    extractNamedValues(m_config.rawScalarExtractions, paths);
+                const Eigen::VectorXd objectives =
+                    assembleDerivedValues(m_config.objectiveResponses, rawValues);
+                const Eigen::VectorXd constraints =
+                    assembleDerivedValues(m_config.constraintResponses, rawValues);
+                writeResultFile(
+                    paths.resultPath,
+                    objectives,
+                    constraints,
+                    std::nullopt,
+                    std::nullopt,
+                    std::nullopt,
+                    std::string("parsed from CalculiX response schema")
+                );
+            } catch (const std::exception& exception) {
+                AnalysisResult result;
+                result.status = AnalysisStatus::InvalidOutput;
+                result.diagnostics = diagnostics;
+                result.diagnostics.message = exception.what();
+                return result;
+            }
+
+            return parseResultFile(paths.resultPath, diagnostics, m_config.backendName);
+        }
+
         if (m_config.objectiveExtractions.empty() && m_config.constraintExtractions.empty()) {
             return JobBackend::parseSuccessfulRun(paths, diagnostics);
         }
@@ -142,11 +199,47 @@ protected:
 private:
     CalculixJobConfig m_config;
 
+    [[nodiscard]] bool usesResponseSchema() const {
+        return !m_config.rawScalarExtractions.empty()
+            || !m_config.objectiveResponses.empty()
+            || !m_config.constraintResponses.empty();
+    }
+
     [[nodiscard]] static Eigen::VectorXd extractValues(const std::vector<CalculixTextScalarRule>& rules,
                                                        const ExecutionPaths& paths) {
         Eigen::VectorXd values(rules.size());
         for (std::size_t index = 0; index < rules.size(); ++index) {
             values(static_cast<Eigen::Index>(index)) = extractScalar(rules[index], paths);
+        }
+        return values;
+    }
+
+    [[nodiscard]] static std::unordered_map<std::string, double>
+    extractNamedValues(const std::vector<CalculixNamedTextScalarRule>& rules,
+                       const ExecutionPaths& paths) {
+        std::unordered_map<std::string, double> values;
+        values.reserve(rules.size());
+
+        for (const CalculixNamedTextScalarRule& rule : rules) {
+            if (rule.id.empty()) {
+                throw std::runtime_error("CalculiX response schema extraction id must not be empty.");
+            }
+            if (values.find(rule.id) != values.end()) {
+                throw std::runtime_error("CalculiX response schema extraction id is duplicated: " + rule.id);
+            }
+
+            values.emplace(rule.id, extractScalar(rule.extraction, paths));
+        }
+
+        return values;
+    }
+
+    [[nodiscard]] static Eigen::VectorXd
+    assembleDerivedValues(const std::vector<CalculixDerivedResponseRule>& rules,
+                          const std::unordered_map<std::string, double>& rawValues) {
+        Eigen::VectorXd values(static_cast<Eigen::Index>(rules.size()));
+        for (std::size_t index = 0; index < rules.size(); ++index) {
+            values(static_cast<Eigen::Index>(index)) = evaluateDerivedRule(rules[index], rawValues);
         }
         return values;
     }
@@ -188,6 +281,34 @@ private:
         return rule.scale * rawValue + rule.offset;
     }
 
+    [[nodiscard]] static double
+    evaluateDerivedRule(const CalculixDerivedResponseRule& rule,
+                        const std::unordered_map<std::string, double>& rawValues) {
+        const auto iterator = rawValues.find(rule.sourceId);
+        if (iterator == rawValues.end()) {
+            throw std::runtime_error("CalculiX response schema source id was not extracted: " + rule.sourceId);
+        }
+
+        const double value = iterator->second;
+        switch (rule.transform) {
+            case CalculixDerivedResponseTransform::Identity:
+                return value;
+            case CalculixDerivedResponseTransform::Affine:
+                return rule.scale * value + rule.offset;
+            case CalculixDerivedResponseTransform::AbsoluteAffine:
+                return rule.scale * std::abs(value) + rule.offset;
+            case CalculixDerivedResponseTransform::InverseAffine:
+                if (std::abs(value) <= 1.0e-16) {
+                    throw std::runtime_error("CalculiX response schema inverse transform encountered a zero source value for "
+                                             + describeDerivedRule(rule) + ".");
+                }
+                return rule.scale / value + rule.offset;
+        }
+
+        throw std::runtime_error("Unsupported CalculiX response schema transform for "
+                                 + describeDerivedRule(rule) + ".");
+    }
+
     [[nodiscard]] static std::filesystem::path resolveSourcePath(const std::filesystem::path& sourceFilename,
                                                                  const ExecutionPaths& paths) {
         if (sourceFilename.is_absolute()) {
@@ -222,6 +343,13 @@ private:
             return rule.label + " in " + sourcePath.string();
         }
         return sourcePath.string();
+    }
+
+    [[nodiscard]] static std::string describeDerivedRule(const CalculixDerivedResponseRule& rule) {
+        if (!rule.label.empty()) {
+            return rule.label;
+        }
+        return rule.sourceId;
     }
 };
 

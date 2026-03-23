@@ -158,6 +158,9 @@ TEST(CalculixE2ETest, DriverImprovesPlateThicknessUsingRealCalculix) {
         *executablePath,
         std::filesystem::path("ccx.stdout.log"),
         std::filesystem::path("ccx.stderr.log"),
+        {},
+        {},
+        {},
         {
             {
                 std::filesystem::path("{job_name}.dat"),
