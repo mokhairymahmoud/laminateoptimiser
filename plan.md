@@ -98,11 +98,10 @@ Status legend:
 
 ## Phase 5: CalculiX-First FE Job-Wrapper Backend
 
-- `[~]` Refactor the concrete job-wrapper backend around a solver-neutral file/job runner.
-  - current status: common template rendering, command execution, timeout handling, and result parsing now live in a shared job backend layer
-  - current status: Abaqus remains available through a compatibility wrapper while the integration is being migrated
-  - current status: a CalculiX-specific backend wrapper now exists and is the intended active FE entry point
-  - remaining work: move the orchestration and project configuration to instantiate CalculiX by default
+- `[x]` Refactor the concrete job-wrapper backend around a solver-neutral file/job runner.
+  - current status: common template rendering, command execution, timeout handling, result parsing, and result-file writing now live in a shared job backend layer
+  - current status: Abaqus remains available only through a compatibility wrapper
+  - current status: a production-facing default backend factory now instantiates CalculiX by default
 - `[x]` Support template input rendering from optimisation variables.
 - `[x]` Support isolated run directories.
 - `[x]` Support external command execution.
@@ -118,12 +117,12 @@ Status legend:
 - `[~]` Add CalculiX result extraction for the objective and constraint quantities needed by the active approximation pipeline.
   - current status: `CalculixJobBackend` can now extract ordered objective and constraint scalars from CalculiX text outputs using configured regex rules and emit the normal backend result contract
   - remaining work: replace fixture-driven extraction rules with the actual project response definitions and solver output files used by this laminate workflow
-- `[ ]` Add a materialized launch path for local CalculiX runs on developer machines:
+- `[x]` Add a materialized launch path for local CalculiX runs on developer machines:
   - discover or configure the `ccx` executable
   - set job naming and working-directory conventions
   - capture stdout/stderr into run diagnostics
 - `[ ]` Decide which real CalculiX runs, if any, will provide native sensitivities and which will rely on the optimiser-side/fallback sensitivity path instead.
-- `[ ]` Keep Abaqus support optional and compatibility-only until there is a concrete need to maintain dual-solver production flows.
+- `[x]` Keep Abaqus support optional and compatibility-only until there is a concrete need to maintain dual-solver production flows.
 
 ## Phase 6: Sensitivities, Fallbacks, and Production Readiness
 
@@ -144,7 +143,7 @@ Status legend:
 
 - `[x]` The repository has been reduced to the active optimisation architecture.
 - `[x]` The build now compiles only active modules and active regression tests.
-- `[~]` The active orchestration layer, shared job backend layer, and core solver bridges build together while the FE wrapper is being migrated from Abaqus-first to CalculiX-first.
+- `[x]` The active orchestration layer, shared job backend layer, and core solver bridges now build around a CalculiX-first FE wrapper, with Abaqus retained only as a compatibility path.
 - `[~]` The core laminate route is in place with shared orchestration-owned section binding helpers, but fallback/projection paths do not all reuse the same helper layer yet.
 - `[x]` Reusable laminate section binding helpers exist in the orchestration layer.
 - `[x]` Supported laminate problems now use the direct core laminate route by default, with projection kept as fallback.
@@ -152,15 +151,11 @@ Status legend:
 
 ## Next Implementation Step
 
-- `[ ]` Make the CalculiX backend the default FE-facing path and bind the assembled optimiser-side laminate response terms to the real result extraction path.
+- `[ ]` Bind the assembled optimiser-side laminate response terms to the actual project-specific CalculiX response files and extraction rules.
 
 Concretely:
 
-1. define the CalculiX run contract:
-   - input deck templating conventions
-   - result-file locations
-   - objective/constraint extraction format
-2. switch orchestration/configuration to construct CalculiX-backed analysis runs by default
-3. build the production response-term assembly from CalculiX-extracted quantities instead of constructing benchmark terms in tests
-4. keep masked backend/native gradients, optimiser-side laminate terms, and finite-difference fallback interoperable for unsupported pieces
-5. add regression coverage around the real CalculiX-facing extraction and assembly path once that contract is defined
+1. define the actual project response files and regex extraction rules for the laminate workflow
+2. build the production response-term assembly from those CalculiX-extracted quantities instead of constructing benchmark terms in tests
+3. keep masked backend/native gradients, optimiser-side laminate terms, and finite-difference fallback interoperable for unsupported pieces
+4. add regression coverage around the real project CalculiX extraction and assembly path

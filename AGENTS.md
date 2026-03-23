@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This repository is the optimisation side of a laminate-composite workflow. It is meant to sit above an external FE solver such as Abaqus, not replace one.
+This repository is the optimisation side of a laminate-composite workflow. It is meant to sit above an external FE solver such as CalculiX, not replace one.
 
 The optimiser is responsible for:
 
@@ -15,8 +15,8 @@ The optimiser is responsible for:
 
 Important architectural constraint:
 
-- Abaqus is a response engine and an optional native gradient source
-- Abaqus must not be assumed to provide lamination-parameter sensitivities
+- The FE solver is a response engine and an optional native gradient source
+- The FE solver must not be assumed to provide lamination-parameter sensitivities
 - lamination-parameter feasibility and as much of the derivative chain as possible stay inside this repo
 
 ## Current Cleaned Architecture
@@ -82,8 +82,14 @@ The papers define the intended mathematics. The C++ is an in-progress implementa
   Generic subproblem interface and simple gradient-penalty fallback solver
 - `src/OptimisationPipeline/globalOptimisationDriver.hpp`
   Outer-loop driver with damping, acceptance, finite-difference fallback, and checkpointing
+- `src/OptimisationPipeline/jobBackend.hpp`
+  Shared file/job backend runner
+- `src/OptimisationPipeline/calculixJobBackend.hpp`
+  CalculiX-first file/job backend with text-response extraction support
+- `src/OptimisationPipeline/defaultAnalysisBackend.hpp`
+  Production-facing default backend factory that selects CalculiX by default
 - `src/OptimisationPipeline/abaqusJobBackend.hpp`
-  File/job-based Abaqus backend skeleton
+  Abaqus compatibility wrapper over the shared job backend
 
 ### Core subproblem adapters
 
@@ -138,7 +144,7 @@ These files are the optimiser-side laminate feasibility model.
   - multiple laminate section blocks
   - non-zero section offsets
 - use a laminate projection wrapper as a fallback path
-- run an Abaqus-style job backend skeleton with template rendering, command execution, timeout handling, and result parsing
+- run a CalculiX-first job backend with template rendering, command execution, timeout handling, log capture, and result parsing/extraction
 
 ## Main Technical Constraints
 
@@ -148,7 +154,7 @@ These files are the optimiser-side laminate feasibility model.
 
 ### 2. Lamination-parameter sensitivities are still an open production item
 
-The architecture is correct now: Abaqus-native gradients are optional. But the production optimiser-side lamination-parameter derivative path is still unfinished.
+The architecture is correct now: solver-native gradients are optional. But the production optimiser-side lamination-parameter derivative path is still unfinished.
 
 ### 3. The laminate projection wrapper is now fallback-only
 
@@ -169,7 +175,7 @@ Treat these as current core-solver names, not as signs that the old orchestratio
 The active test suite is now limited to the current architecture:
 
 - `tests/Miki_test.cpp`
-- `tests/abaqus_backend_test.cpp`
+- `tests/calculix_backend_test.cpp`
 - `tests/dampingUtils_test.cpp`
 - `tests/global_driver_test.cpp`
 - `tests/laminate_test.cpp`

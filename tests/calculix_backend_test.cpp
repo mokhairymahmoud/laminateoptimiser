@@ -1,4 +1,5 @@
 #include "../src/OptimisationPipeline/calculixJobBackend.hpp"
+#include "../src/OptimisationPipeline/defaultAnalysisBackend.hpp"
 
 #include <gtest/gtest.h>
 
@@ -61,7 +62,7 @@ TEST(CalculixBackendTest, BackendRendersParametersAndParsesResults) {
     const std::filesystem::path tempDirectory = TempPath("calculix_success");
     const std::filesystem::path templatePath = WriteTemplate(tempDirectory);
     const std::filesystem::path fixturePath =
-        std::filesystem::path(__FILE__).parent_path() / "fixtures/abaqus/results_success.txt";
+        std::filesystem::path(__FILE__).parent_path() / "fixtures/calculix/results_success.txt";
 
     lamopt::CalculixJobConfig config;
     config.templateInputPath = templatePath;
@@ -124,7 +125,7 @@ TEST(CalculixBackendTest, BackendUsesCalculixDefaultRunDirectoryWhenUnset) {
     const std::filesystem::path tempDirectory = TempPath("calculix_default_run_dir");
     const std::filesystem::path templatePath = WriteTemplate(tempDirectory);
     const std::filesystem::path fixturePath =
-        std::filesystem::path(__FILE__).parent_path() / "fixtures/abaqus/results_success.txt";
+        std::filesystem::path(__FILE__).parent_path() / "fixtures/calculix/results_success.txt";
 
     lamopt::CalculixJobConfig config;
     config.templateInputPath = templatePath;
@@ -148,7 +149,7 @@ TEST(CalculixBackendTest, BackendRunsInsideRunDirectoryAndCapturesLogs) {
     const std::filesystem::path tempDirectory = TempPath("calculix_logs");
     const std::filesystem::path templatePath = WriteTemplate(tempDirectory);
     const std::filesystem::path fixturePath =
-        std::filesystem::path(__FILE__).parent_path() / "fixtures/abaqus/results_success.txt";
+        std::filesystem::path(__FILE__).parent_path() / "fixtures/calculix/results_success.txt";
 
     lamopt::CalculixJobConfig config;
     config.templateInputPath = templatePath;
@@ -177,6 +178,55 @@ TEST(CalculixBackendTest, BackendRunsInsideRunDirectoryAndCapturesLogs) {
     std::stringstream stderrBuffer;
     stderrBuffer << stderrFile.rdbuf();
     EXPECT_NE(stderrBuffer.str().find("missing.stderr.probe"), std::string::npos);
+}
+
+TEST(CalculixBackendTest, DefaultFactoryBuildsCalculixBackend) {
+    const std::filesystem::path tempDirectory = TempPath("calculix_default_factory");
+    const std::filesystem::path templatePath = WriteTemplate(tempDirectory);
+
+    const auto backend = lamopt::MakeDefaultAnalysisBackend({
+        templatePath,
+        tempDirectory,
+        {{"{{X0}}", 0}, {"{{X1}}", 1}},
+        "job.inp",
+        "analysis_results.txt",
+        std::filesystem::path("/bin/sh"),
+        std::filesystem::path("ccx.stdout.log"),
+        std::filesystem::path("ccx.stderr.log")
+    });
+
+    ASSERT_TRUE(backend != nullptr);
+    EXPECT_NE(dynamic_cast<lamopt::CalculixJobBackend*>(backend.get()), nullptr);
+}
+
+TEST(CalculixBackendTest, ConfiguredFactoryCanUseAbaqusCompatibilityBackend) {
+    const std::filesystem::path tempDirectory = TempPath("abaqus_compat_factory");
+    const std::filesystem::path templatePath = WriteTemplate(tempDirectory);
+    const std::filesystem::path fixturePath =
+        std::filesystem::path(__FILE__).parent_path() / "fixtures/calculix/results_success.txt";
+
+    lamopt::AbaqusJobConfig config;
+    config.templateInputPath = templatePath;
+    config.launchCommandTemplate = "cp " + fixturePath.string() + " {result_file}";
+    config.parameterMappings = {{"{{X0}}", 0}, {"{{X1}}", 1}};
+    config.scratchRoot = tempDirectory;
+
+    const auto backend = lamopt::MakeConfiguredAnalysisBackend({
+        lamopt::AnalysisBackendKind::AbaqusCompatibility,
+        std::nullopt,
+        config
+    });
+
+    ASSERT_TRUE(backend != nullptr);
+
+    lamopt::AnalysisRequest request;
+    request.designVariables = Eigen::Vector2d(1.0, 2.0);
+    request.workDirectory = tempDirectory / "run";
+
+    const auto result = backend->evaluate(request);
+
+    ASSERT_TRUE(result.isSuccessful());
+    EXPECT_EQ(result.diagnostics.backendName, "AbaqusJobBackend");
 }
 
 TEST(CalculixBackendTest, BackendCanExtractResponsesFromCalculixTextOutput) {

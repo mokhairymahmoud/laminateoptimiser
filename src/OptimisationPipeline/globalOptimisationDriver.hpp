@@ -384,9 +384,11 @@ private:
             gradients = Eigen::MatrixXd::Zero(nVar, nResp);
         }
         if (!gradientMask.has_value()) {
-            gradientMask = hadGradients
-                ? Eigen::MatrixXi::Ones(nVar, nResp)
-                : Eigen::MatrixXi::Zero(nVar, nResp);
+            if (hadGradients) {
+                gradientMask = Eigen::MatrixXi::Ones(nVar, nResp);
+            } else {
+                gradientMask = Eigen::MatrixXi::Zero(nVar, nResp);
+            }
         }
     }
 
