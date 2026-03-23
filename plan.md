@@ -90,7 +90,10 @@ Status legend:
   - bound constraints
   - current status: the direct core laminate adapter already does this for the cleaned single-objective linearized laminate path
   - remaining work: broaden that path beyond the current objective/approximation shape
-- `[ ]` Make the lamination-parameter mapping and derivative path explicit on our side of the architecture rather than relying on Abaqus-native gradients.
+- `[~]` Make the lamination-parameter mapping and derivative path explicit on our side of the architecture rather than relying on Abaqus-native gradients.
+  - current status: optimiser-owned lamination-parameter derivative interfaces now exist in the pipeline
+  - current status: a first model-backed separable laminate derivative provider is wired into the driver ahead of FE finite-difference fallback
+  - remaining work: broaden the provider beyond the current benchmark response model and connect it to production laminate response assembly
 
 ## Phase 5: Abaqus Job-Wrapper Backend
 
@@ -116,7 +119,10 @@ Status legend:
 - `[x]` Keep fallback gradients configurable rather than always-on.
 - `[x]` Add structured iteration history suitable for diagnostics.
 - `[x]` Add basic checkpoint file writing.
-- `[ ]` Implement the production lamination-parameter sensitivity path outside Abaqus native gradient support.
+- `[~]` Implement the production lamination-parameter sensitivity path outside Abaqus native gradient support.
+  - current status: optimiser-side laminate derivative providers are now plumbed into gradient recovery before finite differences
+  - current status: regression coverage compares the optimiser-side path against finite-difference checks on small laminate benchmarks
+  - remaining work: replace the current benchmark response model with the production laminate derivative chain
 - `[ ]` Add restart/resume from checkpoint into the active driver flow.
 - `[ ]` Add richer production logging/output formats.
 - `[ ]` Add failure summaries and diagnostics tailored to real Abaqus runs.
@@ -129,15 +135,15 @@ Status legend:
 - `[~]` The core laminate route is in place with shared orchestration-owned section binding helpers, but fallback/projection paths do not all reuse the same helper layer yet.
 - `[x]` Reusable laminate section binding helpers exist in the orchestration layer.
 - `[x]` Supported laminate problems now use the direct core laminate route by default, with projection kept as fallback.
-- `[~]` The architecture correctly treats Abaqus gradients as optional, but the optimiser-side lamination-parameter derivative path is still unfinished.
+- `[~]` The architecture correctly treats Abaqus gradients as optional, and the optimiser-side lamination-parameter derivative path now exists for benchmark laminate response models, but the production derivative chain is still unfinished.
 
 ## Next Implementation Step
 
-- `[ ]` Implement the optimiser-side lamination-parameter derivative path so the approximation layer does not depend on Abaqus-native gradients.
+- `[ ]` Extend the optimiser-side lamination-parameter derivative path from the current benchmark response model to the production laminate response assembly.
 
 Concretely:
 
-1. define the optimiser-owned derivative interface for lamination-parameter problems
-2. implement the first derivative provider against the current laminate response model
-3. thread that provider into approximation building alongside the existing native-gradient and finite-difference paths
-4. add regression tests comparing the optimiser-side derivative path against finite-difference checks on small laminate benchmarks
+1. connect the derivative provider to the real laminate response quantities assembled for active FE runs
+2. make the optimiser-side chain cover the production objective/constraint shapes instead of only the benchmark separable model
+3. preserve native-gradient and finite-difference fallback behavior for unsupported responses
+4. add regression tests around the production laminate derivative path once the FE-facing response assembly is defined
