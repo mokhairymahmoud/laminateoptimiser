@@ -4,13 +4,15 @@
 
 This repository is an early-stage research codebase for composite laminate optimisation. It is intended to become an optimisation module that sits above an external finite element analysis workflow, not a standalone structural solver. Abaqus is the clearest target integration, but the architecture should stay general enough to support other FE solvers through the same interface pattern.
 
+Important constraint: Abaqus should be treated primarily as a response engine and only secondarily as an optional native gradient source. The optimisation architecture must not assume that Abaqus can provide sensitivities with respect to lamination parameters. Lamination-parameter mappings, feasibility, and as much of the sensitivity chain as possible need to remain on our side of the interface.
+
 The intended end-to-end system is:
 
-1. Send the current design to an external FE solver such as Abaqus.
-2. Retrieve structural responses and, eventually, sensitivities from that solver.
-3. Build conservative local approximations of those expensive responses.
-4. Solve each approximate subproblem with an interior-point method for separable min-max problems with semidefinite side constraints.
-5. Represent laminate feasibility through SDP formulations, especially the Miki cone / lamination-parameter feasibility constraints.
+1. Send the current design or laminate-equivalent model to an external FE solver such as Abaqus.
+2. Retrieve structural responses and, when available for supported cases, native sensitivities from that solver.
+3. Keep the lamination-parameter mapping and laminate feasibility model analytic on our side.
+4. Build conservative local approximations of the expensive responses.
+5. Solve each approximate subproblem with an interior-point method for separable min-max problems with semidefinite side constraints.
 6. Wrap the whole process in a globally convergent outer loop that updates damping until each accepted step is an improvement step.
 
 The project is not finished. The code compiles and the registered tests pass, but several components are still prototypes, partial refactors, or demo programs rather than a unified production solver.
@@ -47,8 +49,13 @@ Conceptually the system is:
 `External Analysis Interface`
 -> translates optimisation design variables into FE model inputs
 -> launches or drives an external FE solver such as Abaqus
--> extracts responses, constraints, and eventually sensitivities
+-> extracts responses, constraints, and optional native sensitivities
 -> returns that data to the optimisation layer in a solver-agnostic form
+
+`Laminate Parameter Model`
+-> keeps the mapping between optimisation variables and lamination parameters analytic
+-> enforces lamination-parameter feasibility with Miki-cone based constraints
+-> avoids depending on Abaqus for lamination-parameter derivatives
 
 `Approximate Subproblem Solver`
 -> min/max reformulation with objective bound `z`
@@ -63,7 +70,7 @@ Conceptually the system is:
 
 The intended runtime loop is:
 
-`optimiser -> external FE analysis -> approximation builder -> interior-point subproblem solver -> candidate design -> external FE analysis -> acceptance / damping update`
+`optimiser / laminate model -> external FE analysis -> approximation builder -> interior-point subproblem solver -> candidate design -> external FE analysis -> acceptance / damping update`
 
 ## Code Map
 
@@ -137,6 +144,7 @@ The intended runtime loop is:
 - The laminate feasibility pieces (`Miki`, `lpfeasible`, `laminateSection`) are the most coherent domain-specific part of the code.
 - `scminmaxProb.hpp` contains the clearest implementation of the paper-level predictor/corrector logic.
 - The overall role of the project is already clear from the docs: this repo is the optimisation engine around an external FE analysis loop, not a replacement for Abaqus or another FE solver.
+- The laminate paper already provides the key workaround for the Abaqus sensitivity gap: lamination parameters and their feasibility region are modeled analytically through Miki-cone constructions instead of relying on Abaqus-native lamination-parameter sensitivities.
 
 ### Prototype / incomplete / inconsistent parts
 
@@ -181,10 +189,21 @@ This project should eventually be able to:
 - run or delegate an Abaqus analysis
 - read results back into response objects
 - keep the optimisation logic independent from Abaqus-specific file formats as much as possible
+- function correctly even when Abaqus provides no native gradients for the active laminate parameterization
 
 That boundary is currently only partially represented in `src/InterfaceOptimiser/*`.
 
-### 4. Test coverage is weaker than the green test suite suggests
+### 4. Do not assume Abaqus can provide lamination-parameter sensitivities
+
+The papers support a different split of responsibilities:
+
+- Abaqus provides high-fidelity responses and, only where supported, native sensitivities for Abaqus-native design variables.
+- The laminate model in this repo provides the analytic lamination-parameter feasibility machinery.
+- The missing sensitivity path for lamination-parameter optimization should be handled either by:
+  - an internal analytic / adjoint-capable laminate-aware solver path, or
+  - finite differences in lamination-parameter space as a fallback.
+
+### 5. Test coverage is weaker than the green test suite suggests
 
 Some tests are true assertions, especially the newer GTest-based utility tests. Others only run iterative code and return success if nothing crashes.
 
@@ -196,7 +215,7 @@ Before changing numerics, add tests that check:
 - feasibility preservation
 - agreement with known paper examples
 
-### 5. Some “generic” code is not fully generic
+### 6. Some “generic” code is not fully generic
 
 - `src/SDPA/SDPA.hpp` uses `Eigen::GeneralizedSelfAdjointEigenSolver<Eigen::Matrix3d>` inside a template.
   That hard-codes a 3x3 assumption in the step-size calculation.
@@ -222,15 +241,20 @@ Do not start with a large refactor. First make the current research pipeline exp
 
 3. Define the external analysis contract clearly.
    Before deep integration work, decide what the optimiser expects back from Abaqus or another FE solver:
-   responses only, responses plus gradients, file-based exchange, process-level API, restart behaviour, and failure handling.
+   mandatory responses, optional native gradients, file-based exchange, process-level API, restart behaviour, and failure handling.
 
-4. Add real regression tests for the papers’ algorithms.
+4. Make the lamination-parameter sensitivity path explicit.
+   The production architecture should not depend on Abaqus-native lamination-parameter gradients. The preferred paths are:
+   - internal analytic / adjoint sensitivity handling around the laminate model
+   - finite differences in lamination-parameter space as a fallback
+
+5. Add real regression tests for the papers’ algorithms.
    Convert demo tests into assertion-based tests with tolerances.
 
-5. Integrate the laminate feasibility layer into the min-max solver cleanly.
+6. Integrate the laminate feasibility layer into the min-max solver cleanly.
    This is the biggest missing connection called out in the code comments.
 
-6. Only after the above is stable, refactor toward a single abstraction layer.
+7. Only after the above is stable, refactor toward a single abstraction layer.
 
 ## Suggested Near-Term Roadmap
 
@@ -249,7 +273,7 @@ Do not start with a large refactor. First make the current research pipeline exp
 ### Milestone 3: Rebuild the outer global loop
 
 - Align `GlobalOptimiser`, `responseInterface`, and `dampingInterface`.
-- Make the FE-solver interaction explicit and stable, with Abaqus as the first concrete backend.
+- Make the FE-solver interaction explicit and stable, with Abaqus as the first concrete backend and with gradients treated as optional backend capability.
 - Make the outer loop accept a real solver object instead of relying on mismatched template conventions.
 - Add one end-to-end test that exercises:
   - reference design
@@ -259,7 +283,15 @@ Do not start with a large refactor. First make the current research pipeline exp
   - damping update
   - improvement-step acceptance
 
-### Milestone 4: Decide whether to keep or replace the newer dynamic abstractions
+### Milestone 4: Build the lamination-parameter sensitivity path outside Abaqus
+
+- Keep lamination-parameter feasibility and LP mappings analytic inside this codebase.
+- Decide whether the production sensitivity path is:
+  - analytic / adjoint in an internal laminate-aware solver, or
+  - finite differences in lamination-parameter space for early production use
+- Do not block the architecture on Abaqus-native lamination-parameter sensitivities.
+
+### Milestone 5: Decide whether to keep or replace the newer dynamic abstractions
 
 - If keeping `SDPABase` and `SDPASolver`, finish them and migrate one real cone to that stack.
 - Otherwise, remove or isolate them so future work does not split between two architectures.
@@ -268,6 +300,7 @@ Do not start with a large refactor. First make the current research pipeline exp
 
 - Read the papers first before changing numerical logic.
 - Preserve the separation between optimisation logic and FE-backend specifics.
+- Preserve the separation between lamination-parameter modeling and FE-backend specifics.
 - Prefer extending existing numerical code over “clean rewrite” impulses.
 - Keep changes local to one solver stack at a time.
 - Add or tighten tests whenever touching:
@@ -309,4 +342,4 @@ If you are a future agent continuing this project, start here:
 
 ## Bottom Line
 
-This repository already contains much of the mathematical core of the optimisation engine, but not yet a single clean, verified, end-to-end architecture from optimiser to external FE solver. The next useful work is not a cosmetic refactor. It is to make one solver path explicit, tested, paper-faithful, and ready to couple cleanly to Abaqus or another FE backend.
+This repository already contains much of the mathematical core of the optimisation engine, but not yet a single clean, verified, end-to-end architecture from optimiser to external FE solver. The next useful work is not a cosmetic refactor. It is to make one solver path explicit, tested, paper-faithful, and ready to couple cleanly to Abaqus or another FE backend without assuming that Abaqus will supply lamination-parameter sensitivities.
