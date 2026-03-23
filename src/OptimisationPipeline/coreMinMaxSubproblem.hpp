@@ -1,14 +1,13 @@
 #pragma once
 
+#include "laminateSectionBinding.hpp"
 #include "subproblem.hpp"
 #include "../BoundSDP/boundSDP.hpp"
 #include "../GlobalOptimiser/approxFunction.hpp"
 #include "../GlobalOptimiser/scminmaxProb.hpp"
-#include "../Laminate/laminateSection.hpp"
 
 #include <algorithm>
 #include <cmath>
-#include <memory>
 #include <string>
 #include <vector>
 
@@ -260,33 +259,12 @@ public:
             return result;
         }
 
-        std::vector<SectionBinding> sectionBindings;
-        sectionBindings.reserve(problem.laminateSections.size());
-        std::vector<int> variableOwners(static_cast<size_t>(variableCount), -1);
-
-        for (size_t iSection = 0; iSection < problem.laminateSections.size(); ++iSection) {
-            SectionBuildResult sectionBuild = buildSectionBinding(problem.laminateSections[iSection]);
-            if (!sectionBuild.success) {
-                result.message = sectionBuild.message;
-                return result;
-            }
-
-            const SectionBinding& binding = sectionBuild.binding;
-            if (binding.offset < 0 || binding.offset + binding.size > variableCount) {
-                result.message = "Laminate section slice exceeds the reference design size.";
-                return result;
-            }
-
-            for (int iVar = 0; iVar < binding.size; ++iVar) {
-                const int variableIndex = binding.offset + iVar;
-                if (variableOwners[static_cast<size_t>(variableIndex)] != -1) {
-                    result.message = "Laminate section blocks must not overlap in the design vector.";
-                    return result;
-                }
-                variableOwners[static_cast<size_t>(variableIndex)] = static_cast<int>(iSection);
-            }
-
-            sectionBindings.push_back(std::move(sectionBuild.binding));
+        std::vector<LaminateSectionBinding> sectionBindings;
+        if (!BuildLaminateSectionBindings(problem.laminateSections,
+                                          variableCount,
+                                          sectionBindings,
+                                          result.message)) {
+            return result;
         }
 
         const Eigen::Index responseCount = std::max<Eigen::Index>(2, 1 + constraintCount);
@@ -324,12 +302,7 @@ public:
 
         std::vector<optsection::section<double>*> sectionPointers;
         std::vector<int> sectionOffsets;
-        sectionPointers.reserve(sectionBindings.size());
-        sectionOffsets.reserve(sectionBindings.size());
-        for (SectionBinding& binding : sectionBindings) {
-            sectionPointers.push_back(binding.section.get());
-            sectionOffsets.push_back(static_cast<int>(binding.offset));
-        }
+        ExtractLaminateSectionPointersAndOffsets(sectionBindings, sectionPointers, sectionOffsets);
 
         globopt::responseInterface<ApproximationFunction, SideConstraint> solver;
         solver.scMinMaxProb(&approximationFunction, sideConstraints.data());
@@ -361,80 +334,6 @@ public:
     }
 
 private:
-    struct SectionBinding {
-        std::unique_ptr<optsection::section<double>> section;
-        Eigen::Index offset = 0;
-        Eigen::Index size = 0;
-    };
-
-    struct SectionBuildResult {
-        bool success = false;
-        SectionBinding binding;
-        std::string message;
-    };
-
-    template<bool IsBalanced, bool IsSymmetric>
-    SectionBuildResult dispatchBySubLaminates(const LaminateSectionState& sectionState) const {
-        switch (sectionState.sublaminateCount) {
-            case 1:
-                return makeSectionBinding<IsBalanced, IsSymmetric, 1>(sectionState);
-            case 2:
-                return makeSectionBinding<IsBalanced, IsSymmetric, 2>(sectionState);
-            case 4:
-                return makeSectionBinding<IsBalanced, IsSymmetric, 4>(sectionState);
-            case 5:
-                return makeSectionBinding<IsBalanced, IsSymmetric, 5>(sectionState);
-            case 6:
-                return makeSectionBinding<IsBalanced, IsSymmetric, 6>(sectionState);
-            case 8:
-                return makeSectionBinding<IsBalanced, IsSymmetric, 8>(sectionState);
-            case 10:
-                return makeSectionBinding<IsBalanced, IsSymmetric, 10>(sectionState);
-            default: {
-                SectionBuildResult result;
-                result.message = "Unsupported laminate section sublaminate count: "
-                               + std::to_string(sectionState.sublaminateCount);
-                return result;
-            }
-        }
-    }
-
-    template<bool IsBalanced, bool IsSymmetric, int NSUBLAM>
-    SectionBuildResult makeSectionBinding(const LaminateSectionState& sectionState) const {
-        using Section =
-            lampar::laminateSection<lampar::SingleMaterial, IsBalanced, IsSymmetric, NSUBLAM, double>;
-
-        SectionBuildResult result;
-        if (sectionState.laminationParameters.size() != 0
-            && sectionState.laminationParameters.size() != Section::Size - 1) {
-            result.message = "Laminate section lamination-parameter size does not match the selected section type.";
-            return result;
-        }
-
-        auto section = std::make_unique<Section>();
-        section->setBoundThickness(sectionState.thicknessLowerBound, sectionState.thicknessUpperBound);
-
-        result.success = true;
-        result.binding.section = std::move(section);
-        result.binding.offset = sectionState.variableOffset;
-        result.binding.size = Section::Size;
-        return result;
-    }
-
-    SectionBuildResult buildSectionBinding(const LaminateSectionState& sectionState) const {
-        if (sectionState.isBalanced) {
-            if (sectionState.isSymmetric) {
-                return dispatchBySubLaminates<true, true>(sectionState);
-            }
-            return dispatchBySubLaminates<true, false>(sectionState);
-        }
-
-        if (sectionState.isSymmetric) {
-            return dispatchBySubLaminates<false, true>(sectionState);
-        }
-        return dispatchBySubLaminates<false, false>(sectionState);
-    }
-
     CoreLaminateSection1RespOptions m_options;
 };
 

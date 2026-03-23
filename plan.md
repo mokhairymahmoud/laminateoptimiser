@@ -68,19 +68,22 @@ Status legend:
 - `[~]` Connect the new driver to the core `scminmaxProb` solver as the production subproblem backend.
   - current status: `CoreMinMax2Var4RespSubproblemSolver` covers the benchmark 2-variable / 4-response path
   - current status: `CoreLaminateSection1RespSubproblemSolver` covers direct laminate-aware single-objective linearized solves with response constraints, multiple section blocks, and non-zero offsets
-  - remaining work: consolidate these adapters behind a cleaner production-facing interface
+  - current status: `DefaultLaminateSubproblemSolver` now routes supported laminate problems to the direct core solver first and uses laminate projection only as fallback
+  - remaining work: consolidate the specialized adapters behind a cleaner production-facing configuration/factory layer
 
 ## Phase 4: Laminate-Specific Constraint Integration
 
 - `[x]` Standardize optimiser-side laminate state in the new pipeline request model.
 - `[~]` Make laminate sections first-class side constraints in the new subproblem solver path.
   - current status: direct section-aware core solves are in place for the active laminate adapter
+  - current status: the direct section-aware route is now the default orchestration choice for supported laminate problems
   - current status: `LaminateAwareSubproblemSolver` remains available as a fallback projection route
-  - remaining work: make the direct section-aware route the default orchestration choice for supported laminate problems
+  - remaining work: broaden support beyond the current single-objective linearized laminate problem shape
 - `[~]` Integrate `laminateSection` ownership cleanly into the orchestration layer.
   - current status: laminate section offsets and bounds flow from `AnalysisRequest` into `ApproximationProblem`
   - current status: the core solver can now carry full `optsection::section` objects with offsets
-  - remaining work: move section creation and binding out of adapter-specific code into reusable helpers
+  - current status: section creation/binding now lives in reusable `laminateSectionBinding` helpers instead of adapter-specific code
+  - remaining work: reuse the same helpers in every laminate fallback/projection path so section dispatch is defined in one place
 - `[~]` Assemble approximate subproblems that simultaneously include:
   - response constraints
   - laminate feasibility constraints
@@ -123,16 +126,18 @@ Status legend:
 - `[x]` The repository has been reduced to the active optimisation architecture.
 - `[x]` The build now compiles only active modules and active regression tests.
 - `[x]` The active orchestration layer, Abaqus backend skeleton, and core solver bridges all build and test together.
-- `[~]` The core laminate route is in place, but its section binding/dispatch is still adapter-owned rather than orchestration-owned.
+- `[~]` The core laminate route is in place with shared orchestration-owned section binding helpers, but fallback/projection paths do not all reuse the same helper layer yet.
+- `[x]` Reusable laminate section binding helpers exist in the orchestration layer.
+- `[x]` Supported laminate problems now use the direct core laminate route by default, with projection kept as fallback.
 - `[~]` The architecture correctly treats Abaqus gradients as optional, but the optimiser-side lamination-parameter derivative path is still unfinished.
 
 ## Next Implementation Step
 
-- `[ ]` Extract reusable laminate section binding helpers and make the direct core laminate route the default orchestration path for supported laminate problems.
+- `[ ]` Implement the optimiser-side lamination-parameter derivative path so the approximation layer does not depend on Abaqus-native gradients.
 
 Concretely:
 
-1. move section creation/dispatch logic out of `CoreLaminateSection1RespSubproblemSolver`
-2. let orchestration choose the direct section-aware core solve first when the laminate problem shape is supported
-3. keep the laminate projection wrapper only as fallback behavior
-4. after that, move to the explicit optimiser-side lamination-parameter derivative implementation
+1. define the optimiser-owned derivative interface for lamination-parameter problems
+2. implement the first derivative provider against the current laminate response model
+3. thread that provider into approximation building alongside the existing native-gradient and finite-difference paths
+4. add regression tests comparing the optimiser-side derivative path against finite-difference checks on small laminate benchmarks
