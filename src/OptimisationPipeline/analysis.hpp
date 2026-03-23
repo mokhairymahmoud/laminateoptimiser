@@ -1,5 +1,7 @@
 #pragma once
 
+#include "responseSchema.hpp"
+
 #include <Eigen/Dense>
 
 #include <filesystem>
@@ -53,6 +55,7 @@ struct AnalysisResult {
     AnalysisStatus status = AnalysisStatus::BackendFailure;
     Eigen::VectorXd objectives;
     Eigen::VectorXd constraints;
+    NamedScalarResponseMap extractedScalarValues;
     std::optional<Eigen::MatrixXd> objectiveGradients;
     std::optional<Eigen::MatrixXi> objectiveGradientMask;
     std::optional<Eigen::MatrixXd> constraintGradients;

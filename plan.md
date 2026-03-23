@@ -136,6 +136,7 @@ Status legend:
 - `[~]` Implement the production lamination-parameter sensitivity path outside solver-native gradient support.
   - current status: optimiser-side laminate derivative providers are now plumbed into gradient recovery before finite differences
   - current status: regression coverage now exercises complete-model recovery and mixed backend-plus-laminate gradient assembly on small laminate benchmarks
+  - current status: extracted FE scalar quantities can now flow through response-schema assembly and into optimiser-side laminate derivatives via an explicit chain-rule binding layer
   - remaining work: replace the in-test response assembly with the production laminate derivative chain driven by real FE response extraction
 - `[ ]` Add restart/resume from checkpoint into the active driver flow.
 - `[ ]` Add richer production logging/output formats.

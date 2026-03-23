@@ -1,5 +1,6 @@
 #include "../src/OptimisationPipeline/globalOptimisationDriver.hpp"
 #include "../src/OptimisationPipeline/laminationParameterDerivatives.hpp"
+#include "../src/OptimisationPipeline/responseSchema.hpp"
 
 #include <gtest/gtest.h>
 
@@ -66,6 +67,76 @@ lamopt::SeparableLaminateResponseModel MakeBenchmarkModel() {
     model.objectives.push_back({0.7, objectiveDesign, {objectiveTerm}});
     model.constraints.push_back({-1.2, constraintDesign, {constraintTerm}});
     return model;
+}
+
+lamopt::SeparableLaminateQuantityModel MakeAssembledQuantityModel() {
+    const Eigen::Index designSize = 7;
+    const lamopt::LaminateSectionState section = MakeBalancedSymmetricSection(1);
+    const Eigen::Index sectionSize = lamopt::LaminateSectionVariableCount(section);
+
+    auto makeResponse = [designSize, sectionSize](double constant,
+                                                  std::initializer_list<double> designLinear,
+                                                  std::initializer_list<double> designQuadratic,
+                                                  std::initializer_list<double> sectionLinear,
+                                                  std::initializer_list<double> sectionQuadratic) {
+        lamopt::DenseDesignResponseTerm designTerms;
+        designTerms.linearCoefficients = Eigen::VectorXd::Zero(designSize);
+        designTerms.quadraticCoefficients = Eigen::VectorXd::Zero(designSize);
+
+        Eigen::Index index = 0;
+        for (double value : designLinear) {
+            designTerms.linearCoefficients(index++) = value;
+        }
+        index = 0;
+        for (double value : designQuadratic) {
+            designTerms.quadraticCoefficients(index++) = value;
+        }
+
+        lamopt::SeparableLaminateSectionResponseTerm sectionTerms;
+        sectionTerms.linearCoefficients = Eigen::VectorXd::Zero(sectionSize);
+        sectionTerms.quadraticCoefficients = Eigen::VectorXd::Zero(sectionSize);
+        index = 0;
+        for (double value : sectionLinear) {
+            sectionTerms.linearCoefficients(index++) = value;
+        }
+        index = 0;
+        for (double value : sectionQuadratic) {
+            sectionTerms.quadraticCoefficients(index++) = value;
+        }
+
+        return lamopt::SeparableLaminateResponse{constant, designTerms, {sectionTerms}};
+    };
+
+    lamopt::SeparableLaminateQuantityModel model;
+    model.quantities.push_back({"mass", makeResponse(9.0,
+                                                     {0.3, 0.0, 0.0, 0.0, 0.0, 0.0, -0.1},
+                                                     {0.02, 0.0, 0.0, 0.0, 0.0, 0.0, 0.03},
+                                                     {0.1, -0.05, 0.08, 0.0, 0.4},
+                                                     {0.0, 0.02, 0.0, 0.0, 0.1})});
+    model.quantities.push_back({"buckling_lambda_1", makeResponse(2.5,
+                                                                  {-0.2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.15},
+                                                                  {0.04, 0.0, 0.0, 0.0, 0.0, 0.0, -0.01},
+                                                                  {0.2, 0.05, -0.1, 0.04, 0.25},
+                                                                  {0.03, 0.0, 0.01, 0.0, 0.05})});
+    model.quantities.push_back({"tip_u3", makeResponse(0.6,
+                                                       {0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.2},
+                                                       {0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0},
+                                                       {0.05, -0.03, 0.04, 0.02, 0.3},
+                                                       {0.0, 0.01, 0.0, 0.0, 0.04})});
+    return model;
+}
+
+std::vector<lamopt::DerivedScalarResponseRule> MakeObjectiveAssemblyRules() {
+    return {
+        {"mass", lamopt::DerivedScalarResponseTransform::Identity, 1.0, 0.0, "objective_mass"}
+    };
+}
+
+std::vector<lamopt::DerivedScalarResponseRule> MakeConstraintAssemblyRules() {
+    return {
+        {"buckling_lambda_1", lamopt::DerivedScalarResponseTransform::InverseAffine, 1.0, -1.0, "buckling_margin"},
+        {"tip_u3", lamopt::DerivedScalarResponseTransform::AbsoluteAffine, 1.0 / 3.0, -1.0, "tip_displacement_margin"}
+    };
 }
 
 class ZeroMovementSolver final : public lamopt::SubproblemSolver {
@@ -140,6 +211,71 @@ private:
     }
 
     lamopt::SeparableLaminateResponseModel m_model;
+    GradientMode m_gradientMode = GradientMode::None;
+};
+
+class AssembledLaminateBackend final : public lamopt::AnalysisBackend {
+public:
+    enum class GradientMode {
+        None,
+        DesignOnlyPartial
+    };
+
+    AssembledLaminateBackend(lamopt::SeparableLaminateQuantityModel quantityModel,
+                             std::vector<lamopt::DerivedScalarResponseRule> objectiveRules,
+                             std::vector<lamopt::DerivedScalarResponseRule> constraintRules,
+                             GradientMode gradientMode)
+        : m_quantityModel(std::move(quantityModel))
+        , m_objectiveRules(std::move(objectiveRules))
+        , m_constraintRules(std::move(constraintRules))
+        , m_gradientMode(gradientMode) {}
+
+    lamopt::AnalysisResult evaluate(const lamopt::AnalysisRequest& request) override {
+        lamopt::AnalysisResult result;
+        result.status = lamopt::AnalysisStatus::Success;
+
+        const Eigen::VectorXd rawValues = m_quantityModel.evaluateQuantities(request);
+        for (std::size_t index = 0; index < m_quantityModel.quantities.size(); ++index) {
+            result.extractedScalarValues.emplace(m_quantityModel.quantities[index].id,
+                                                 rawValues(static_cast<Eigen::Index>(index)));
+        }
+
+        result.objectives = Eigen::VectorXd::Zero(static_cast<Eigen::Index>(m_objectiveRules.size()));
+        for (std::size_t index = 0; index < m_objectiveRules.size(); ++index) {
+            result.objectives(static_cast<Eigen::Index>(index)) =
+                lamopt::EvaluateDerivedScalarResponseRule(m_objectiveRules[index], result.extractedScalarValues);
+        }
+
+        result.constraints = Eigen::VectorXd::Zero(static_cast<Eigen::Index>(m_constraintRules.size()));
+        for (std::size_t index = 0; index < m_constraintRules.size(); ++index) {
+            result.constraints(static_cast<Eigen::Index>(index)) =
+                lamopt::EvaluateDerivedScalarResponseRule(m_constraintRules[index], result.extractedScalarValues);
+        }
+
+        if (m_gradientMode == GradientMode::DesignOnlyPartial) {
+            result.objectiveGradients = Eigen::MatrixXd::Zero(request.designVariables.size(), result.objectives.size());
+            result.constraintGradients = Eigen::MatrixXd::Zero(request.designVariables.size(), result.constraints.size());
+            result.objectiveGradientMask = makeDesignOnlyMask(request, result.objectives.size());
+            result.constraintGradientMask = makeDesignOnlyMask(request, result.constraints.size());
+        }
+
+        result.diagnostics.message = "assembled laminate benchmark";
+        return result;
+    }
+
+private:
+    static Eigen::MatrixXi makeDesignOnlyMask(const lamopt::AnalysisRequest& request,
+                                              const Eigen::Index responseCount) {
+        Eigen::MatrixXi mask = Eigen::MatrixXi::Ones(request.designVariables.size(), responseCount);
+        const lamopt::LaminateSectionState& sectionState = request.laminateSections.front();
+        const Eigen::Index sectionSize = lamopt::LaminateSectionVariableCount(sectionState);
+        mask.block(sectionState.variableOffset, 0, sectionSize, responseCount).setZero();
+        return mask;
+    }
+
+    lamopt::SeparableLaminateQuantityModel m_quantityModel;
+    std::vector<lamopt::DerivedScalarResponseRule> m_objectiveRules;
+    std::vector<lamopt::DerivedScalarResponseRule> m_constraintRules;
     GradientMode m_gradientMode = GradientMode::None;
 };
 
@@ -285,6 +421,97 @@ TEST(LaminationParameterDerivativesTest, ProviderCombinesLaminateRowsWithPartial
     EXPECT_EQ(result.analysis.constraintGradientMask->minCoeff(), 1);
     EXPECT_NE(result.analysis.diagnostics.message.find("Optimiser-side lamination-parameter gradients attached."),
               std::string::npos);
+}
+
+TEST(LaminationParameterDerivativesTest, AssembledProviderBindsExtractedQuantitiesThroughChainRule) {
+    const lamopt::SeparableLaminateQuantityModel quantityModel = MakeAssembledQuantityModel();
+    const auto objectiveRules = MakeObjectiveAssemblyRules();
+    const auto constraintRules = MakeConstraintAssemblyRules();
+
+    lamopt::AssembledLaminationParameterDerivativeProvider derivativeProvider(
+        quantityModel,
+        objectiveRules,
+        constraintRules
+    );
+    lamopt::LinearApproximationBuilder approximationBuilder;
+    ZeroMovementSolver subproblemSolver;
+
+    lamopt::DriverOptions options = MakeDriverOptions();
+    options.gradientFallbackMode = lamopt::GradientFallbackMode::Disabled;
+
+    AssembledLaminateBackend backend(quantityModel,
+                                     objectiveRules,
+                                     constraintRules,
+                                     AssembledLaminateBackend::GradientMode::None);
+    lamopt::GlobalOptimisationDriver driver(backend,
+                                            approximationBuilder,
+                                            subproblemSolver,
+                                            options,
+                                            &derivativeProvider);
+
+    const lamopt::AnalysisRequest request = MakeBenchmarkRequest("laminate_derivative_schema_binding");
+    const lamopt::GlobalOptimisationResult result = driver.optimise(request);
+
+    ASSERT_TRUE(result.converged);
+    ASSERT_TRUE(result.analysis.hasAllGradients());
+    ASSERT_TRUE(result.analysis.objectiveGradients.has_value());
+    ASSERT_TRUE(result.analysis.constraintGradients.has_value());
+
+    const Eigen::MatrixXd quantityGradients = quantityModel.quantityGradients(request);
+    const double bucklingValue = result.analysis.extractedScalarValues.at("buckling_lambda_1");
+    const double tipValue = result.analysis.extractedScalarValues.at("tip_u3");
+
+    Eigen::MatrixXd expectedObjectiveGradients(request.designVariables.size(), 1);
+    expectedObjectiveGradients.col(0) = quantityGradients.col(0);
+
+    Eigen::MatrixXd expectedConstraintGradients(request.designVariables.size(), 2);
+    expectedConstraintGradients.col(0) = (-1.0 / (bucklingValue * bucklingValue)) * quantityGradients.col(1);
+    expectedConstraintGradients.col(1) = (1.0 / 3.0) * quantityGradients.col(2);
+
+    EXPECT_TRUE(result.analysis.objectiveGradients->isApprox(expectedObjectiveGradients, 1.0e-12));
+    EXPECT_TRUE(result.analysis.constraintGradients->isApprox(expectedConstraintGradients, 1.0e-12));
+    EXPECT_NE(result.analysis.diagnostics.message.find("extracted FE quantities"), std::string::npos);
+}
+
+TEST(LaminationParameterDerivativesTest, AssembledProviderCanFillLaminateRowsOnlyForSchemaResponses) {
+    const lamopt::SeparableLaminateQuantityModel quantityModel = MakeAssembledQuantityModel();
+    const auto objectiveRules = MakeObjectiveAssemblyRules();
+    const auto constraintRules = MakeConstraintAssemblyRules();
+
+    lamopt::SeparableLaminationParameterDerivativeOptions derivativeOptions;
+    derivativeOptions.coverageMode = lamopt::LaminationParameterCoverageMode::LaminateSectionRowsOnly;
+
+    lamopt::AssembledLaminationParameterDerivativeProvider derivativeProvider(
+        quantityModel,
+        objectiveRules,
+        constraintRules,
+        derivativeOptions
+    );
+    lamopt::LinearApproximationBuilder approximationBuilder;
+    ZeroMovementSolver subproblemSolver;
+
+    lamopt::DriverOptions options = MakeDriverOptions();
+    options.gradientFallbackMode = lamopt::GradientFallbackMode::Disabled;
+
+    AssembledLaminateBackend backend(quantityModel,
+                                     objectiveRules,
+                                     constraintRules,
+                                     AssembledLaminateBackend::GradientMode::DesignOnlyPartial);
+    lamopt::GlobalOptimisationDriver driver(backend,
+                                            approximationBuilder,
+                                            subproblemSolver,
+                                            options,
+                                            &derivativeProvider);
+
+    const lamopt::AnalysisRequest request = MakeBenchmarkRequest("laminate_derivative_schema_partial");
+    const lamopt::GlobalOptimisationResult result = driver.optimise(request);
+
+    ASSERT_TRUE(result.converged);
+    ASSERT_TRUE(result.analysis.hasAllGradients());
+    ASSERT_TRUE(result.analysis.objectiveGradientMask.has_value());
+    ASSERT_TRUE(result.analysis.constraintGradientMask.has_value());
+    EXPECT_EQ(result.analysis.objectiveGradientMask->minCoeff(), 1);
+    EXPECT_EQ(result.analysis.constraintGradientMask->minCoeff(), 1);
 }
 
 int main(int argc, char** argv) {

@@ -54,6 +54,11 @@ struct SeparableLaminateResponse {
     std::vector<SeparableLaminateSectionResponseTerm> sectionTerms;
 };
 
+struct NamedSeparableLaminateResponse {
+    std::string id;
+    SeparableLaminateResponse response;
+};
+
 class SeparableLaminateResponseModel {
 public:
     std::vector<SeparableLaminateResponse> objectives;
@@ -123,7 +128,7 @@ public:
         return constraintDesignGradients(request) + constraintSectionGradients(request);
     }
 
-private:
+public:
     [[nodiscard]] static bool validateSectionSlices(const AnalysisRequest& request,
                                                     std::vector<Eigen::Index>& sectionSizes,
                                                     std::string& message) {
@@ -321,6 +326,118 @@ private:
     }
 };
 
+class SeparableLaminateQuantityModel {
+public:
+    std::vector<NamedSeparableLaminateResponse> quantities;
+
+    [[nodiscard]] bool validate(const AnalysisRequest& request,
+                                const AnalysisResult& result,
+                                std::string& message) const {
+        if (request.laminateSections.empty()) {
+            message = "At least one laminate section is required for optimiser-side laminate derivatives.";
+            return false;
+        }
+
+        std::vector<Eigen::Index> sectionSizes;
+        if (!SeparableLaminateResponseModel::validateSectionSlices(request, sectionSizes, message)) {
+            return false;
+        }
+
+        std::unordered_map<std::string, std::size_t> ids;
+        for (const NamedSeparableLaminateResponse& quantity : quantities) {
+            if (quantity.id.empty()) {
+                message = "Laminate quantity ids must not be empty.";
+                return false;
+            }
+            if (!ids.emplace(quantity.id, ids.size()).second) {
+                message = "Laminate quantity ids must be unique.";
+                return false;
+            }
+            const std::vector<SeparableLaminateResponse> response = {quantity.response};
+            if (!SeparableLaminateResponseModel::validateResponses(response,
+                                                                  request.designVariables.size(),
+                                                                  sectionSizes,
+                                                                  "quantity",
+                                                                  message)) {
+                return false;
+            }
+            if (result.extractedScalarValues.find(quantity.id) == result.extractedScalarValues.end()) {
+                message = "Extracted FE quantity not found for laminate derivative assembly: " + quantity.id;
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    [[nodiscard]] std::optional<std::size_t> findIndex(const std::string& id) const {
+        for (std::size_t index = 0; index < quantities.size(); ++index) {
+            if (quantities[index].id == id) {
+                return index;
+            }
+        }
+        return std::nullopt;
+    }
+
+    [[nodiscard]] Eigen::VectorXd evaluateQuantities(const AnalysisRequest& request) const {
+        Eigen::VectorXd values = Eigen::VectorXd::Zero(static_cast<Eigen::Index>(quantities.size()));
+        for (std::size_t index = 0; index < quantities.size(); ++index) {
+            values(static_cast<Eigen::Index>(index)) =
+                SeparableLaminateResponseModel::evaluateResponse(quantities[index].response, request);
+        }
+        return values;
+    }
+
+    [[nodiscard]] Eigen::MatrixXd quantityGradients(const AnalysisRequest& request) const {
+        Eigen::MatrixXd gradients =
+            Eigen::MatrixXd::Zero(request.designVariables.size(), static_cast<Eigen::Index>(quantities.size()));
+        for (std::size_t index = 0; index < quantities.size(); ++index) {
+            gradients.col(static_cast<Eigen::Index>(index)) =
+                responseGradient(quantities[index].response, request);
+        }
+        return gradients;
+    }
+
+    [[nodiscard]] Eigen::MatrixXd quantitySectionGradients(const AnalysisRequest& request) const {
+        Eigen::MatrixXd gradients =
+            Eigen::MatrixXd::Zero(request.designVariables.size(), static_cast<Eigen::Index>(quantities.size()));
+        for (std::size_t index = 0; index < quantities.size(); ++index) {
+            gradients.col(static_cast<Eigen::Index>(index)) =
+                responseSectionGradient(quantities[index].response, request);
+        }
+        return gradients;
+    }
+
+private:
+    [[nodiscard]] static Eigen::VectorXd responseGradient(const SeparableLaminateResponse& response,
+                                                          const AnalysisRequest& request) {
+        return responseDesignGradient(response, request) + responseSectionGradient(response, request);
+    }
+
+    [[nodiscard]] static Eigen::VectorXd responseDesignGradient(const SeparableLaminateResponse& response,
+                                                                const AnalysisRequest& request) {
+        return SeparableLaminateResponseModel::evaluateDenseTermGradient(response.designTerms,
+                                                                         request.designVariables);
+    }
+
+    [[nodiscard]] static Eigen::VectorXd responseSectionGradient(const SeparableLaminateResponse& response,
+                                                                 const AnalysisRequest& request) {
+        Eigen::VectorXd gradient = Eigen::VectorXd::Zero(request.designVariables.size());
+        for (std::size_t iSection = 0; iSection < response.sectionTerms.size(); ++iSection) {
+            const LaminateSectionState& sectionState = request.laminateSections[iSection];
+            const SeparableLaminateSectionResponseTerm& sectionTerm = response.sectionTerms[iSection];
+            const Eigen::Index sectionSize = sectionTerm.linearCoefficients.size();
+            const Eigen::VectorXd sectionVariables =
+                request.designVariables.segment(sectionState.variableOffset, sectionSize);
+
+            gradient.segment(sectionState.variableOffset, sectionSize) +=
+                sectionTerm.linearCoefficients
+                + sectionTerm.quadraticCoefficients.cwiseProduct(sectionVariables);
+        }
+        return gradient;
+    }
+};
+
 enum class LaminationParameterCoverageMode {
     CompleteResponse,
     LaminateSectionRowsOnly
@@ -401,6 +518,125 @@ private:
     }
 
     SeparableLaminateResponseModel m_model;
+    SeparableLaminationParameterDerivativeOptions m_options;
+};
+
+class AssembledLaminationParameterDerivativeProvider final : public LaminationParameterDerivativeProvider {
+public:
+    AssembledLaminationParameterDerivativeProvider(SeparableLaminateQuantityModel quantityModel,
+                                                   std::vector<DerivedScalarResponseRule> objectiveRules,
+                                                   std::vector<DerivedScalarResponseRule> constraintRules,
+                                                   SeparableLaminationParameterDerivativeOptions options = {})
+        : m_quantityModel(std::move(quantityModel))
+        , m_objectiveRules(std::move(objectiveRules))
+        , m_constraintRules(std::move(constraintRules))
+        , m_options(options) {}
+
+    [[nodiscard]] bool supports(const AnalysisRequest& request,
+                                const AnalysisResult& result) const override {
+        std::string message;
+        return validate(request, result, message);
+    }
+
+    [[nodiscard]] LaminationParameterDerivativeResult compute(const AnalysisRequest& request,
+                                                              const AnalysisResult& result) const override {
+        LaminationParameterDerivativeResult derivativeResult;
+        if (!validate(request, result, derivativeResult.message)) {
+            return derivativeResult;
+        }
+
+        const Eigen::MatrixXd quantityGradients = m_options.coverageMode == LaminationParameterCoverageMode::CompleteResponse
+            ? m_quantityModel.quantityGradients(request)
+            : m_quantityModel.quantitySectionGradients(request);
+
+        if (!result.hasObjectiveGradients()) {
+            derivativeResult.objectiveGradients =
+                assembleContribution(quantityGradients,
+                                     request,
+                                     result.extractedScalarValues,
+                                     m_objectiveRules);
+        }
+        if (!result.hasConstraintGradients()) {
+            derivativeResult.constraintGradients =
+                assembleContribution(quantityGradients,
+                                     request,
+                                     result.extractedScalarValues,
+                                     m_constraintRules);
+        }
+
+        derivativeResult.success = true;
+        derivativeResult.message = "Optimiser-side lamination-parameter gradients attached from extracted FE quantities.";
+        return derivativeResult;
+    }
+
+private:
+    [[nodiscard]] bool validate(const AnalysisRequest& request,
+                                const AnalysisResult& result,
+                                std::string& message) const {
+        if (!m_quantityModel.validate(request, result, message)) {
+            return false;
+        }
+        if (result.objectives.size() != static_cast<Eigen::Index>(m_objectiveRules.size())) {
+            message = "Objective count does not match the assembled laminate derivative rules.";
+            return false;
+        }
+        if (result.constraints.size() != static_cast<Eigen::Index>(m_constraintRules.size())) {
+            message = "Constraint count does not match the assembled laminate derivative rules.";
+            return false;
+        }
+
+        for (const DerivedScalarResponseRule& rule : m_objectiveRules) {
+            if (!m_quantityModel.findIndex(rule.sourceId).has_value()) {
+                message = "Assembled laminate objective rule references an unknown quantity id: " + rule.sourceId;
+                return false;
+            }
+        }
+        for (const DerivedScalarResponseRule& rule : m_constraintRules) {
+            if (!m_quantityModel.findIndex(rule.sourceId).has_value()) {
+                message = "Assembled laminate constraint rule references an unknown quantity id: " + rule.sourceId;
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    [[nodiscard]] GradientContributionMatrix
+    assembleContribution(const Eigen::MatrixXd& quantityGradients,
+                         const AnalysisRequest& request,
+                         const NamedScalarResponseMap& extractedScalars,
+                         const std::vector<DerivedScalarResponseRule>& rules) const {
+        GradientContributionMatrix contribution;
+        contribution.values =
+            Eigen::MatrixXd::Zero(request.designVariables.size(), static_cast<Eigen::Index>(rules.size()));
+        contribution.mask =
+            Eigen::MatrixXi::Zero(request.designVariables.size(), static_cast<Eigen::Index>(rules.size()));
+
+        for (std::size_t iRule = 0; iRule < rules.size(); ++iRule) {
+            const auto quantityIndex = m_quantityModel.findIndex(rules[iRule].sourceId);
+            const double chainFactor = EvaluateDerivedScalarResponseDerivative(rules[iRule], extractedScalars);
+            contribution.values.col(static_cast<Eigen::Index>(iRule)) =
+                chainFactor * quantityGradients.col(static_cast<Eigen::Index>(*quantityIndex));
+        }
+
+        if (m_options.coverageMode == LaminationParameterCoverageMode::CompleteResponse) {
+            contribution.mask.setOnes();
+        } else {
+            for (const LaminateSectionState& sectionState : request.laminateSections) {
+                const Eigen::Index sectionSize = LaminateSectionVariableCount(sectionState);
+                contribution.mask.block(sectionState.variableOffset,
+                                        0,
+                                        sectionSize,
+                                        contribution.mask.cols()).setOnes();
+            }
+        }
+
+        return contribution;
+    }
+
+    SeparableLaminateQuantityModel m_quantityModel;
+    std::vector<DerivedScalarResponseRule> m_objectiveRules;
+    std::vector<DerivedScalarResponseRule> m_constraintRules;
     SeparableLaminationParameterDerivativeOptions m_options;
 };
 

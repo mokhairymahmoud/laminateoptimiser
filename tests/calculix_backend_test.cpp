@@ -304,19 +304,11 @@ TEST(CalculixBackendTest, BackendCanAssembleResponsesFromNamedCalculixSchema) {
           "tip_u3_mm"}}
     };
     config.objectiveResponses = {
-        {"mass", lamopt::CalculixDerivedResponseTransform::Identity, 1.0, 0.0, "objective_mass"}
+        {"mass", lamopt::DerivedScalarResponseTransform::Identity, 1.0, 0.0, "objective_mass"}
     };
     config.constraintResponses = {
-        {"buckling_lambda_1",
-         lamopt::CalculixDerivedResponseTransform::InverseAffine,
-         1.0,
-         -1.0,
-         "buckling_margin"},
-        {"tip_u3",
-         lamopt::CalculixDerivedResponseTransform::AbsoluteAffine,
-         1.0 / 3.0,
-         -1.0,
-         "tip_displacement_margin"}
+        {"buckling_lambda_1", lamopt::DerivedScalarResponseTransform::InverseAffine, 1.0, -1.0, "buckling_margin"},
+        {"tip_u3", lamopt::DerivedScalarResponseTransform::AbsoluteAffine, 1.0 / 3.0, -1.0, "tip_displacement_margin"}
     };
 
     lamopt::CalculixJobBackend backend(config);
@@ -333,6 +325,10 @@ TEST(CalculixBackendTest, BackendCanAssembleResponsesFromNamedCalculixSchema) {
     EXPECT_NEAR(result.constraints(0), 1.0 / 0.92 - 1.0, 1.0e-12);
     EXPECT_NEAR(result.constraints(1), 3.1 / 3.0 - 1.0, 1.0e-12);
     EXPECT_EQ(result.diagnostics.message, "parsed from CalculiX response schema");
+    ASSERT_EQ(result.extractedScalarValues.size(), 3U);
+    EXPECT_NEAR(result.extractedScalarValues.at("mass"), 12.75, 1.0e-12);
+    EXPECT_NEAR(result.extractedScalarValues.at("buckling_lambda_1"), 0.92, 1.0e-12);
+    EXPECT_NEAR(result.extractedScalarValues.at("tip_u3"), 3.1, 1.0e-12);
 }
 
 TEST(CalculixBackendTest, BenchmarkSchemaHelperBuildsBucklingResponses) {
@@ -347,9 +343,12 @@ TEST(CalculixBackendTest, BenchmarkSchemaHelperBuildsBucklingResponses) {
     config.parameterMappings = {{"{{X0}}", 0}, {"{{X1}}", 1}};
     config.scratchRoot = tempDirectory;
 
+    lamopt::CalculixPlateBucklingBenchmarkSchemaOptions options;
+    options.tipDisplacementLimit = 3.5;
+    options.displacementScale = 1000.0;
     lamopt::ConfigureCalculixPlateBucklingBenchmarkResponses(
         config,
-        {.tipDisplacementLimit = 3.5, .displacementScale = 1000.0}
+        options
     );
 
     lamopt::CalculixJobBackend backend(config);

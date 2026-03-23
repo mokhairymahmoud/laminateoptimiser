@@ -46,21 +46,17 @@ inline void ConfigureCalculixPlateBucklingBenchmarkResponses(
     };
 
     config.objectiveResponses = {
-        {"mass",
-         CalculixDerivedResponseTransform::Identity,
-         1.0,
-         0.0,
-         "objective_mass"}
+        {"mass", DerivedScalarResponseTransform::Identity, 1.0, 0.0, "objective_mass"}
     };
 
     config.constraintResponses = {
         {"buckling_lambda_1",
-         CalculixDerivedResponseTransform::InverseAffine,
+         DerivedScalarResponseTransform::InverseAffine,
          options.requiredBucklingFactor,
          -1.0,
          "buckling_margin"},
         {"tip_u3",
-         CalculixDerivedResponseTransform::AbsoluteAffine,
+         DerivedScalarResponseTransform::AbsoluteAffine,
          1.0 / options.tipDisplacementLimit,
          -1.0,
          "tip_displacement_margin"}
@@ -98,21 +94,17 @@ inline void ConfigureCalculixPlateBucklingBenchmarkResponses(
     };
 
     setup.objectiveResponses = {
-        {"mass",
-         CalculixDerivedResponseTransform::Identity,
-         1.0,
-         0.0,
-         "objective_mass"}
+        {"mass", DerivedScalarResponseTransform::Identity, 1.0, 0.0, "objective_mass"}
     };
 
     setup.constraintResponses = {
         {"buckling_lambda_1",
-         CalculixDerivedResponseTransform::InverseAffine,
+         DerivedScalarResponseTransform::InverseAffine,
          options.requiredBucklingFactor,
          -1.0,
          "buckling_margin"},
         {"tip_u3",
-         CalculixDerivedResponseTransform::AbsoluteAffine,
+         DerivedScalarResponseTransform::AbsoluteAffine,
          1.0 / options.tipDisplacementLimit,
          -1.0,
          "tip_displacement_margin"}
