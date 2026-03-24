@@ -65,11 +65,11 @@ Status legend:
   - backend failure
 - `[x]` Keep serializable run state/history and add checkpoint writing support.
 - `[x]` Add integration tests with fake backends and scripted subproblem solvers.
-- `[~]` Connect the new driver to the core `scminmaxProb` solver as the production subproblem backend.
+- `[x]` Connect the new driver to the core `scminmaxProb` solver as the production subproblem backend.
   - current status: `CoreMinMax2Var4RespSubproblemSolver` covers the benchmark 2-variable / 4-response path
   - current status: `CoreLaminateSection1RespSubproblemSolver` covers direct laminate-aware single-objective linearized solves with response constraints, multiple section blocks, and non-zero offsets
   - current status: `DefaultLaminateSubproblemSolver` now routes supported laminate problems to the direct core solver first and uses laminate projection only as fallback
-  - remaining work: consolidate the specialized adapters behind a cleaner production-facing configuration/factory layer
+  - current status: `ConfiguredSubproblemSolver` now provides a production-facing configuration/factory layer for the active benchmark and laminate routing paths
 
 ## Phase 4: Laminate-Specific Constraint Integration
 
@@ -167,4 +167,4 @@ Status legend:
 
 ## Next Implementation Step
 
-- `[ ]` Consolidate the specialized subproblem adapters behind a cleaner production-facing configuration/factory layer.
+- `[ ]` Broaden the direct laminate core route beyond the current single-objective linearized laminate problem shape.
