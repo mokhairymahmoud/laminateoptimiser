@@ -77,8 +77,9 @@ Status legend:
 - `[~]` Make laminate sections first-class side constraints in the new subproblem solver path.
   - current status: direct section-aware core solves are in place for the active laminate adapter
   - current status: the direct section-aware route is now the default orchestration choice for supported laminate problems
+  - current status: the direct core laminate route now supports multiple linearized objective responses in addition to response constraints, multiple section blocks, and non-zero offsets
   - current status: `LaminateAwareSubproblemSolver` remains available as a fallback projection route
-  - remaining work: broaden support beyond the current single-objective linearized laminate problem shape
+  - remaining work: broaden support beyond the current linearized laminate approximation shape
 - `[x]` Integrate `laminateSection` ownership cleanly into the orchestration layer.
   - current status: laminate section offsets and bounds flow from `AnalysisRequest` into `ApproximationProblem`
   - current status: the core solver can now carry full `optsection::section` objects with offsets
@@ -88,8 +89,8 @@ Status legend:
   - response constraints
   - laminate feasibility constraints
   - bound constraints
-  - current status: the direct core laminate adapter already does this for the cleaned single-objective linearized laminate path
-  - remaining work: broaden that path beyond the current objective/approximation shape
+  - current status: the direct core laminate adapter already does this for the cleaned linearized laminate path, including multiple objectives, response constraints, laminate feasibility constraints, and bound constraints
+  - remaining work: broaden that path beyond the current linearized approximation shape
 - `[~]` Make the lamination-parameter mapping and derivative path explicit on our side of the architecture rather than relying on solver-native gradients.
   - current status: optimiser-owned lamination-parameter derivative interfaces now exist in the pipeline
   - current status: assembled laminate response terms can now mix dense design contributions with laminate-section contributions

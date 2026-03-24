@@ -126,6 +126,16 @@ public:
     }
 };
 
+class FailingSubproblemSolver final : public lamopt::SubproblemSolver {
+public:
+    lamopt::SubproblemResult solve(const lamopt::ApproximationProblem&) override {
+        lamopt::SubproblemResult result;
+        result.success = false;
+        result.message = "forced direct-route failure";
+        return result;
+    }
+};
+
 class Problem1Backend final : public lamopt::AnalysisBackend {
 public:
     lamopt::AnalysisResult evaluate(const lamopt::AnalysisRequest& request) override {
@@ -650,6 +660,31 @@ TEST(GlobalDriverTest, CoreLaminateAdapterSupportsMultipleSectionBlocks) {
     EXPECT_LT(result.candidateDesign(9), 2.0);
 }
 
+TEST(GlobalDriverTest, CoreLaminateAdapterSupportsMultipleObjectives) {
+    lamopt::CoreLaminateSection1RespSubproblemSolver subproblemSolver;
+
+    lamopt::ApproximationProblem problem;
+    problem.referenceDesign = Eigen::VectorXd::Zero(5);
+    problem.referenceDesign(4) = 1.0;
+    problem.objectiveValues = Eigen::VectorXd::Constant(2, -1.0);
+    problem.constraintValues = Eigen::VectorXd();
+    problem.objectiveGradients = Eigen::MatrixXd::Zero(5, 2);
+    (*problem.objectiveGradients)(4, 0) = -1.0;
+    (*problem.objectiveGradients)(4, 1) = -0.5;
+    problem.responseDampingFactors = Eigen::VectorXd::Ones(2);
+    problem.designDampingVector = Eigen::VectorXd::Ones(5);
+    problem.laminateSections.push_back(MakeBalancedSymmetricSection(0));
+
+    const lamopt::SubproblemResult result = subproblemSolver.solve(problem);
+
+    ASSERT_TRUE(result.success);
+    ASSERT_EQ(result.predictedObjectives.size(), 2);
+    EXPECT_GT(result.candidateDesign(4), 1.1);
+    EXPECT_LT(result.candidateDesign(4), 1.5);
+    EXPECT_LT(result.predictedObjectives(0), -1.1);
+    EXPECT_LT(result.predictedObjectives(1), -1.05);
+}
+
 TEST(GlobalDriverTest, DefaultLaminateSolverUsesDirectCoreRouteWhenSupported) {
     LaminateScriptedSolver scriptedFallbackSolver;
     lamopt::CoreLaminateSection1RespSubproblemSolver directLaminateSolver;
@@ -676,17 +711,16 @@ TEST(GlobalDriverTest, DefaultLaminateSolverUsesDirectCoreRouteWhenSupported) {
 
 TEST(GlobalDriverTest, DefaultLaminateSolverFallsBackToProjectionRouteWhenUnsupported) {
     LaminateScriptedSolver scriptedFallbackSolver;
-    lamopt::CoreLaminateSection1RespSubproblemSolver directLaminateSolver;
+    FailingSubproblemSolver directLaminateSolver;
     lamopt::DefaultLaminateSubproblemSolver routedSolver(scriptedFallbackSolver, directLaminateSolver);
 
     lamopt::ApproximationProblem problem;
     problem.referenceDesign = Eigen::VectorXd::Zero(5);
     problem.referenceDesign(4) = 1.0;
-    problem.objectiveValues = Eigen::VectorXd::Constant(2, -1.0);
-    problem.constraintValues = Eigen::VectorXd();
-    problem.objectiveGradients = Eigen::MatrixXd::Zero(5, 2);
+    problem.objectiveValues = Eigen::VectorXd::Constant(1, -1.0);
+    problem.constraintValues = Eigen::VectorXd::Constant(1, -0.2);
+    problem.objectiveGradients = Eigen::MatrixXd::Zero(5, 1);
     (*problem.objectiveGradients)(4, 0) = -1.0;
-    (*problem.objectiveGradients)(4, 1) = -0.5;
     problem.responseDampingFactors = Eigen::VectorXd::Ones(2);
     problem.designDampingVector = Eigen::VectorXd::Ones(5);
     problem.laminateSections.push_back(MakeBalancedSymmetricSection(0));
@@ -755,6 +789,28 @@ TEST(GlobalDriverTest, ConfiguredSolverUsesProjectionFallbackWhenDirectLaminateR
     lamopt::ApproximationProblem problem;
     problem.referenceDesign = Eigen::VectorXd::Zero(5);
     problem.referenceDesign(4) = 1.0;
+    problem.objectiveValues = Eigen::VectorXd::Constant(1, -1.0);
+    problem.constraintValues = Eigen::VectorXd::Constant(1, -0.2);
+    problem.objectiveGradients = Eigen::MatrixXd::Zero(5, 1);
+    (*problem.objectiveGradients)(4, 0) = -1.0;
+    problem.responseDampingFactors = Eigen::VectorXd::Ones(2);
+    problem.designDampingVector = Eigen::VectorXd::Ones(5);
+    problem.laminateSections.push_back(MakeBalancedSymmetricSection(0));
+
+    const lamopt::SubproblemResult result = solver.solve(problem);
+
+    ASSERT_TRUE(result.success);
+    EXPECT_GT(result.candidateDesign(4), 1.05);
+    EXPECT_LT(result.candidateDesign(4), 1.3);
+    EXPECT_NE(result.message.find("route: laminate_projection_fallback"), std::string::npos);
+}
+
+TEST(GlobalDriverTest, ConfiguredSolverUsesDirectLaminateRouteForMultipleObjectives) {
+    lamopt::ConfiguredSubproblemSolver solver;
+
+    lamopt::ApproximationProblem problem;
+    problem.referenceDesign = Eigen::VectorXd::Zero(5);
+    problem.referenceDesign(4) = 1.0;
     problem.objectiveValues = Eigen::VectorXd::Constant(2, -1.0);
     problem.constraintValues = Eigen::VectorXd();
     problem.objectiveGradients = Eigen::MatrixXd::Zero(5, 2);
@@ -767,9 +823,8 @@ TEST(GlobalDriverTest, ConfiguredSolverUsesProjectionFallbackWhenDirectLaminateR
     const lamopt::SubproblemResult result = solver.solve(problem);
 
     ASSERT_TRUE(result.success);
-    EXPECT_GT(result.candidateDesign(4), 1.05);
-    EXPECT_LT(result.candidateDesign(4), 1.3);
-    EXPECT_NE(result.message.find("route: laminate_projection_fallback"), std::string::npos);
+    ASSERT_EQ(result.predictedObjectives.size(), 2);
+    EXPECT_NE(result.message.find("route: direct_core_laminate"), std::string::npos);
 }
 
 TEST(GlobalDriverTest, DriverImprovesWithCoreLaminateSectionAdapter) {

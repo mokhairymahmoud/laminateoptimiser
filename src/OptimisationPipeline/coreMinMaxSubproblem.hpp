@@ -220,17 +220,18 @@ public:
 
         SubproblemResult result;
         const Eigen::Index variableCount = problem.referenceDesign.size();
+        const Eigen::Index objectiveCount = problem.objectiveValues.size();
         const Eigen::Index constraintCount = problem.constraintValues.size();
 
-        if (problem.objectiveValues.size() != 1) {
-            result.message = "Core laminate adapter currently supports exactly 1 objective response.";
+        if (objectiveCount == 0) {
+            result.message = "Core laminate adapter requires at least one objective response.";
             return result;
         }
         if (!problem.objectiveGradients.has_value()) {
             result.message = "Core laminate adapter requires objective gradients.";
             return result;
         }
-        if (problem.objectiveGradients->rows() != variableCount || problem.objectiveGradients->cols() != 1) {
+        if (problem.objectiveGradients->rows() != variableCount || problem.objectiveGradients->cols() != objectiveCount) {
             result.message = "Objective gradient dimensions do not match the laminate section adapter requirements.";
             return result;
         }
@@ -267,7 +268,7 @@ public:
             return result;
         }
 
-        const Eigen::Index responseCount = std::max<Eigen::Index>(2, 1 + constraintCount);
+        const Eigen::Index responseCount = std::max<Eigen::Index>(2, objectiveCount + constraintCount);
         ApproximationFunction approximationFunction(responseCount, variableCount);
         ApproximationFunction::Vector_v design = problem.referenceDesign;
         ApproximationFunction::Vector_r referenceResponses =
@@ -276,19 +277,22 @@ public:
             ApproximationFunction::Matrix_t::Zero(variableCount, responseCount);
         ApproximationFunction::Vector_r objectiveMask =
             ApproximationFunction::Vector_r::Zero(responseCount);
-        objectiveMask(0) = 1.0;
+        objectiveMask.head(objectiveCount).setOnes();
 
-        const double objectiveScale =
-            std::max(std::abs(problem.objectiveValues(0)), m_options.objectiveScaleFloor);
-        referenceResponses(0) = problem.objectiveValues(0) / objectiveScale;
-        gradients.col(0) = problem.objectiveGradients->col(0) / objectiveScale;
-        if (constraintCount != 0) {
-            referenceResponses.segment(1, constraintCount) = problem.constraintValues;
-            gradients.block(0, 1, variableCount, constraintCount) = *problem.constraintGradients;
-        } else {
-            referenceResponses(1) = -1.0;
+        Eigen::VectorXd objectiveScales = Eigen::VectorXd::Constant(objectiveCount, m_options.objectiveScaleFloor);
+        for (Eigen::Index iObjective = 0; iObjective < objectiveCount; ++iObjective) {
+            objectiveScales(iObjective) =
+                std::max(std::abs(problem.objectiveValues(iObjective)), m_options.objectiveScaleFloor);
+            referenceResponses(iObjective) = problem.objectiveValues(iObjective) / objectiveScales(iObjective);
+            gradients.col(iObjective) = problem.objectiveGradients->col(iObjective) / objectiveScales(iObjective);
         }
-        approximationFunction.ConfigureLinearModel(design, referenceResponses, gradients, objectiveMask, 1);
+        if (constraintCount != 0) {
+            referenceResponses.segment(objectiveCount, constraintCount) = problem.constraintValues;
+            gradients.block(0, objectiveCount, variableCount, constraintCount) = *problem.constraintGradients;
+        } else if (responseCount > objectiveCount) {
+            referenceResponses(objectiveCount) = -1.0;
+        }
+        approximationFunction.ConfigureLinearModel(design, referenceResponses, gradients, objectiveMask, objectiveCount);
 
         std::vector<SideConstraint> sideConstraints(static_cast<size_t>(variableCount));
         for (Eigen::Index iVar = 0; iVar < variableCount; ++iVar) {
@@ -325,10 +329,13 @@ public:
         result.success = true;
         result.iterations = solver.getLastIterationCount();
         result.candidateDesign = candidate;
-        result.predictedObjectives = Eigen::VectorXd::Constant(1, predictedResponses(0) * objectiveScale);
+        result.predictedObjectives = predictedResponses.head(objectiveCount);
+        for (Eigen::Index iObjective = 0; iObjective < objectiveCount; ++iObjective) {
+            result.predictedObjectives(iObjective) *= objectiveScales(iObjective);
+        }
         result.predictedConstraints = constraintCount == 0
             ? Eigen::VectorXd()
-            : predictedResponses.segment(1, constraintCount);
+            : predictedResponses.segment(objectiveCount, constraintCount);
         result.message = "Candidate produced by the core laminate section adapter.";
         return result;
     }
