@@ -685,6 +685,32 @@ TEST(GlobalDriverTest, CoreLaminateAdapterSupportsMultipleObjectives) {
     EXPECT_LT(result.predictedObjectives(1), -1.05);
 }
 
+TEST(GlobalDriverTest, CoreLaminateAdapterUsesObjectiveCurvatureInPredictedResponse) {
+    lamopt::CoreLaminateSection1RespSubproblemSolver subproblemSolver;
+
+    lamopt::ApproximationProblem problem;
+    problem.referenceDesign = Eigen::VectorXd::Zero(5);
+    problem.referenceDesign(4) = 1.0;
+    problem.objectiveValues = Eigen::VectorXd::Constant(1, -1.0);
+    problem.constraintValues = Eigen::VectorXd();
+    problem.objectiveGradients = Eigen::MatrixXd::Zero(5, 1);
+    (*problem.objectiveGradients)(4, 0) = -1.0;
+    problem.objectiveCurvature = Eigen::MatrixXd::Zero(5, 1);
+    (*problem.objectiveCurvature)(4, 0) = 0.6;
+    problem.responseDampingFactors = Eigen::VectorXd::Ones(1);
+    problem.designDampingVector = Eigen::VectorXd::Ones(5);
+    problem.laminateSections.push_back(MakeBalancedSymmetricSection(0));
+
+    const lamopt::SubproblemResult result = subproblemSolver.solve(problem);
+
+    ASSERT_TRUE(result.success);
+    const double delta = result.candidateDesign(4) - problem.referenceDesign(4);
+    const double expectedObjective = problem.objectiveValues(0)
+        + (*problem.objectiveGradients)(4, 0) * delta
+        + 0.5 * (*problem.objectiveCurvature)(4, 0) * delta * delta;
+    EXPECT_NEAR(result.predictedObjectives(0), expectedObjective, 1.0e-9);
+}
+
 TEST(GlobalDriverTest, DefaultLaminateSolverUsesDirectCoreRouteWhenSupported) {
     LaminateScriptedSolver scriptedFallbackSolver;
     lamopt::CoreLaminateSection1RespSubproblemSolver directLaminateSolver;

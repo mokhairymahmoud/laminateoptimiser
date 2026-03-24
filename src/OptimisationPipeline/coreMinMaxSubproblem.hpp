@@ -39,6 +39,7 @@ public:
         NVAR = static_cast<int>(variableCount);
         freeTerms = Vector_r::Zero(responseCount);
         linearGradients = Matrix_t::Zero(variableCount, responseCount);
+        quadraticCurvature = Matrix_t::Zero(variableCount, responseCount);
         objectiveMask = Vector_r::Zero(responseCount);
         objectiveCount = 0;
     }
@@ -55,27 +56,70 @@ public:
                               const int objectives) {
         resize(referenceResponses.size(), referenceDesign.size());
         linearGradients = gradients;
+        quadraticCurvature = Matrix_t::Zero(referenceDesign.size(), referenceResponses.size());
         objectiveMask = mask;
         objectiveCount = objectives;
         freeTerms = referenceResponses - gradients.transpose() * referenceDesign;
     }
 
+    void ConfigureQuadraticModel(const Vector_v& referenceDesign,
+                                 const Vector_r& referenceResponses,
+                                 const Matrix_t& gradients,
+                                 const Matrix_t& curvature,
+                                 const Vector_r& mask,
+                                 const int objectives) {
+        resize(referenceResponses.size(), referenceDesign.size());
+        linearGradients = gradients;
+        quadraticCurvature = curvature;
+        objectiveMask = mask;
+        objectiveCount = objectives;
+
+        for (Eigen::Index iResp = 0; iResp < referenceResponses.size(); ++iResp) {
+            double freeTerm = referenceResponses(iResp);
+            for (Eigen::Index iVar = 0; iVar < referenceDesign.size(); ++iVar) {
+                const double x0 = referenceDesign(iVar);
+                freeTerm -= gradients(iVar, iResp) * x0;
+                freeTerm += 0.5 * curvature(iVar, iResp) * x0 * x0;
+                linearGradients(iVar, iResp) -= curvature(iVar, iResp) * x0;
+            }
+            freeTerms(iResp) = freeTerm;
+        }
+    }
+
     void Eval(Vector_v primalVar,
-              Vector_r /*dualVar*/,
+              Vector_r dualVar,
               Vector_r& responses,
               Matrix_t& gradients,
-              Hessian_t& /*hessian*/) {
+              Hessian_t& hessian) {
         responses = freeTerms + linearGradients.transpose() * primalVar;
         gradients = linearGradients;
+        if (!quadraticCurvature.isZero(0.0)) {
+            for (Eigen::Index iResp = 0; iResp < NRESP; ++iResp) {
+                for (Eigen::Index iVar = 0; iVar < NVAR; ++iVar) {
+                    const double curvature = quadraticCurvature(iVar, iResp);
+                    responses(iResp) += 0.5 * curvature * primalVar(iVar) * primalVar(iVar);
+                    gradients(iVar, iResp) += curvature * primalVar(iVar);
+                    hessian(iVar, iVar) += curvature * dualVar(iResp);
+                }
+            }
+        }
     }
 
     void Eval(Vector_v primalVar, Vector_r& responses) {
         responses = freeTerms + linearGradients.transpose() * primalVar;
+        if (!quadraticCurvature.isZero(0.0)) {
+            for (Eigen::Index iResp = 0; iResp < NRESP; ++iResp) {
+                for (Eigen::Index iVar = 0; iVar < NVAR; ++iVar) {
+                    responses(iResp) += 0.5 * quadraticCurvature(iVar, iResp) * primalVar(iVar) * primalVar(iVar);
+                }
+            }
+        }
     }
 
 private:
     Vector_r freeTerms;
     Matrix_t linearGradients;
+    Matrix_t quadraticCurvature;
     Vector_r objectiveMask;
     int objectiveCount = 0;
 };
@@ -235,6 +279,13 @@ public:
             result.message = "Objective gradient dimensions do not match the laminate section adapter requirements.";
             return result;
         }
+        if (problem.objectiveCurvature.has_value()) {
+            if (problem.objectiveCurvature->rows() != variableCount
+                || problem.objectiveCurvature->cols() != objectiveCount) {
+                result.message = "Objective curvature dimensions do not match the laminate section adapter requirements.";
+                return result;
+            }
+        }
         if (constraintCount != 0 && !problem.constraintGradients.has_value()) {
             result.message = "Constraint gradients are required when response constraints are present.";
             return result;
@@ -275,6 +326,8 @@ public:
             ApproximationFunction::Vector_r::Zero(responseCount);
         ApproximationFunction::Matrix_t gradients =
             ApproximationFunction::Matrix_t::Zero(variableCount, responseCount);
+        ApproximationFunction::Matrix_t curvature =
+            ApproximationFunction::Matrix_t::Zero(variableCount, responseCount);
         ApproximationFunction::Vector_r objectiveMask =
             ApproximationFunction::Vector_r::Zero(responseCount);
         objectiveMask.head(objectiveCount).setOnes();
@@ -285,6 +338,9 @@ public:
                 std::max(std::abs(problem.objectiveValues(iObjective)), m_options.objectiveScaleFloor);
             referenceResponses(iObjective) = problem.objectiveValues(iObjective) / objectiveScales(iObjective);
             gradients.col(iObjective) = problem.objectiveGradients->col(iObjective) / objectiveScales(iObjective);
+            if (problem.objectiveCurvature.has_value()) {
+                curvature.col(iObjective) = problem.objectiveCurvature->col(iObjective) / objectiveScales(iObjective);
+            }
         }
         if (constraintCount != 0) {
             referenceResponses.segment(objectiveCount, constraintCount) = problem.constraintValues;
@@ -292,7 +348,18 @@ public:
         } else if (responseCount > objectiveCount) {
             referenceResponses(objectiveCount) = -1.0;
         }
-        approximationFunction.ConfigureLinearModel(design, referenceResponses, gradients, objectiveMask, objectiveCount);
+        if (problem.objectiveCurvature.has_value()) {
+            approximationFunction.ConfigureQuadraticModel(
+                design,
+                referenceResponses,
+                gradients,
+                curvature,
+                objectiveMask,
+                objectiveCount
+            );
+        } else {
+            approximationFunction.ConfigureLinearModel(design, referenceResponses, gradients, objectiveMask, objectiveCount);
+        }
 
         std::vector<SideConstraint> sideConstraints(static_cast<size_t>(variableCount));
         for (Eigen::Index iVar = 0; iVar < variableCount; ++iVar) {
