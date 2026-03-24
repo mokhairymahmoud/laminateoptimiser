@@ -88,8 +88,11 @@ TEST(CalculixBackendTest, BackendRendersParametersAndParsesResults) {
     EXPECT_EQ(result.constraints.size(), 2);
     ASSERT_TRUE(result.objectiveGradients.has_value());
     ASSERT_TRUE(result.constraintGradients.has_value());
+    ASSERT_TRUE(result.constraintCurvature.has_value());
     EXPECT_NEAR((*result.objectiveGradients)(0, 0), 1.0, 1.0e-12);
     EXPECT_NEAR((*result.constraintGradients)(1, 1), -0.75, 1.0e-12);
+    EXPECT_NEAR((*result.constraintCurvature)(0, 0), 0.10, 1.0e-12);
+    EXPECT_NEAR((*result.constraintCurvature)(1, 1), -0.40, 1.0e-12);
 
     std::ifstream renderedInput(request.workDirectory / "job.inp");
     std::stringstream buffer;

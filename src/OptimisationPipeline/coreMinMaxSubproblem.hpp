@@ -298,6 +298,14 @@ public:
                 return result;
             }
         }
+        if (problem.constraintCurvature.has_value()) {
+            if (problem.constraintCurvature->rows() != variableCount
+                || problem.constraintCurvature->cols() != constraintCount) {
+                result.message =
+                    "Constraint curvature dimensions do not match the laminate section adapter requirements.";
+                return result;
+            }
+        }
         if (problem.laminateSections.empty()) {
             result.message = "Core laminate adapter requires at least one laminate section block.";
             return result;
@@ -345,10 +353,13 @@ public:
         if (constraintCount != 0) {
             referenceResponses.segment(objectiveCount, constraintCount) = problem.constraintValues;
             gradients.block(0, objectiveCount, variableCount, constraintCount) = *problem.constraintGradients;
+            if (problem.constraintCurvature.has_value()) {
+                curvature.block(0, objectiveCount, variableCount, constraintCount) = *problem.constraintCurvature;
+            }
         } else if (responseCount > objectiveCount) {
             referenceResponses(objectiveCount) = -1.0;
         }
-        if (problem.objectiveCurvature.has_value()) {
+        if (problem.objectiveCurvature.has_value() || problem.constraintCurvature.has_value()) {
             approximationFunction.ConfigureQuadraticModel(
                 design,
                 referenceResponses,

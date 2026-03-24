@@ -14,6 +14,7 @@ struct ApproximationProblem {
     std::optional<Eigen::MatrixXd> objectiveGradients;
     std::optional<Eigen::MatrixXd> constraintGradients;
     std::optional<Eigen::MatrixXd> objectiveCurvature;
+    std::optional<Eigen::MatrixXd> constraintCurvature;
     Eigen::VectorXd responseDampingFactors;
     Eigen::VectorXd designDampingVector;
     std::optional<Eigen::VectorXd> lowerBounds;
@@ -44,6 +45,7 @@ public:
         problem.objectiveGradients = referenceResult.objectiveGradients;
         problem.constraintGradients = referenceResult.constraintGradients;
         problem.objectiveCurvature = referenceResult.objectiveCurvature;
+        problem.constraintCurvature = referenceResult.constraintCurvature;
         problem.designDampingVector = designDampingVector;
         problem.responseDampingFactors = responseDampingFactors;
         problem.lowerBounds = request.lowerBounds;

@@ -185,6 +185,9 @@ protected:
         if (fields.count("objective_curvature") != 0) {
             result.objectiveCurvature = parseMatrix(fields["objective_curvature"]);
         }
+        if (fields.count("constraint_curvature") != 0) {
+            result.constraintCurvature = parseMatrix(fields["constraint_curvature"]);
+        }
 
         result.status = AnalysisStatus::Success;
         if (fields.count("message") != 0) {
@@ -199,6 +202,7 @@ protected:
                                 const std::optional<Eigen::MatrixXd>& objectiveGradients = std::nullopt,
                                 const std::optional<Eigen::MatrixXd>& constraintGradients = std::nullopt,
                                 const std::optional<Eigen::MatrixXd>& objectiveCurvature = std::nullopt,
+                                const std::optional<Eigen::MatrixXd>& constraintCurvature = std::nullopt,
                                 const std::optional<std::string>& message = std::nullopt) {
         std::ofstream resultStream(resultPath);
         if (!resultStream) {
@@ -215,6 +219,9 @@ protected:
         }
         if (objectiveCurvature.has_value()) {
             resultStream << "objective_curvature=" << formatMatrix(*objectiveCurvature) << '\n';
+        }
+        if (constraintCurvature.has_value()) {
+            resultStream << "constraint_curvature=" << formatMatrix(*constraintCurvature) << '\n';
         }
         if (message.has_value()) {
             resultStream << "message=" << *message << '\n';

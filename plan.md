@@ -78,9 +78,9 @@ Status legend:
   - current status: direct section-aware core solves are in place for the active laminate adapter
   - current status: the direct section-aware route is now the default orchestration choice for supported laminate problems
   - current status: the direct core laminate route now supports multiple linearized objective responses in addition to response constraints, multiple section blocks, and non-zero offsets
-  - current status: the direct core laminate route now also supports diagonal quadratic objective curvature in the active approximation model
+  - current status: the direct core laminate route now also supports diagonal quadratic curvature for both objectives and response constraints in the active approximation model
   - current status: `LaminateAwareSubproblemSolver` remains available as a fallback projection route
-  - remaining work: broaden support beyond the current objective-only quadratic / otherwise linear laminate approximation shape
+  - remaining work: broaden support beyond the current diagonal quadratic laminate approximation shape
 - `[x]` Integrate `laminateSection` ownership cleanly into the orchestration layer.
   - current status: laminate section offsets and bounds flow from `AnalysisRequest` into `ApproximationProblem`
   - current status: the core solver can now carry full `optsection::section` objects with offsets
@@ -90,8 +90,8 @@ Status legend:
   - response constraints
   - laminate feasibility constraints
   - bound constraints
-  - current status: the direct core laminate adapter already does this for the cleaned laminate path, including multiple objectives, diagonal quadratic objective curvature, response constraints, laminate feasibility constraints, and bound constraints
-  - remaining work: broaden that path beyond the current objective-only quadratic / otherwise linear approximation shape
+  - current status: the direct core laminate adapter already does this for the cleaned laminate path, including multiple objectives, diagonal quadratic response curvature, response constraints, laminate feasibility constraints, and bound constraints
+  - remaining work: broaden that path beyond the current diagonal quadratic approximation shape
 - `[~]` Make the lamination-parameter mapping and derivative path explicit on our side of the architecture rather than relying on solver-native gradients.
   - current status: optimiser-owned lamination-parameter derivative interfaces now exist in the pipeline
   - current status: assembled laminate response terms can now mix dense design contributions with laminate-section contributions

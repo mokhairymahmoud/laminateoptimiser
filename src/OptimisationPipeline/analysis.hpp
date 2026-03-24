@@ -112,6 +112,7 @@ struct AnalysisResult {
     std::optional<Eigen::MatrixXd> constraintGradients;
     std::optional<Eigen::MatrixXi> constraintGradientMask;
     std::optional<Eigen::MatrixXd> objectiveCurvature;
+    std::optional<Eigen::MatrixXd> constraintCurvature;
     AnalysisDiagnostics diagnostics;
 
     [[nodiscard]] bool isSuccessful() const {

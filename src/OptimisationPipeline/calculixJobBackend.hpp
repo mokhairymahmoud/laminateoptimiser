@@ -151,6 +151,7 @@ protected:
                     std::nullopt,
                     std::nullopt,
                     std::nullopt,
+                    std::nullopt,
                     std::string("parsed from CalculiX response schema")
                 );
             } catch (const std::exception& exception) {
@@ -179,6 +180,7 @@ protected:
                 paths.resultPath,
                 objectives,
                 constraints,
+                std::nullopt,
                 std::nullopt,
                 std::nullopt,
                 std::nullopt,

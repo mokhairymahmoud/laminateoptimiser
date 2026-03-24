@@ -711,6 +711,35 @@ TEST(GlobalDriverTest, CoreLaminateAdapterUsesObjectiveCurvatureInPredictedRespo
     EXPECT_NEAR(result.predictedObjectives(0), expectedObjective, 1.0e-9);
 }
 
+TEST(GlobalDriverTest, CoreLaminateAdapterUsesConstraintCurvatureInPredictedResponse) {
+    lamopt::CoreLaminateSection1RespSubproblemSolver subproblemSolver;
+
+    lamopt::ApproximationProblem problem;
+    problem.referenceDesign = Eigen::VectorXd::Zero(5);
+    problem.referenceDesign(4) = 1.0;
+    problem.objectiveValues = Eigen::VectorXd::Constant(1, -1.0);
+    problem.constraintValues = Eigen::VectorXd::Constant(1, -0.2);
+    problem.objectiveGradients = Eigen::MatrixXd::Zero(5, 1);
+    (*problem.objectiveGradients)(4, 0) = -1.0;
+    problem.constraintGradients = Eigen::MatrixXd::Zero(5, 1);
+    (*problem.constraintGradients)(4, 0) = 0.4;
+    problem.constraintCurvature = Eigen::MatrixXd::Zero(5, 1);
+    (*problem.constraintCurvature)(4, 0) = 0.8;
+    problem.responseDampingFactors = Eigen::VectorXd::Ones(2);
+    problem.designDampingVector = Eigen::VectorXd::Ones(5);
+    problem.laminateSections.push_back(MakeBalancedSymmetricSection(0));
+
+    const lamopt::SubproblemResult result = subproblemSolver.solve(problem);
+
+    ASSERT_TRUE(result.success);
+    ASSERT_EQ(result.predictedConstraints.size(), 1);
+    const double delta = result.candidateDesign(4) - problem.referenceDesign(4);
+    const double expectedConstraint = problem.constraintValues(0)
+        + (*problem.constraintGradients)(4, 0) * delta
+        + 0.5 * (*problem.constraintCurvature)(4, 0) * delta * delta;
+    EXPECT_NEAR(result.predictedConstraints(0), expectedConstraint, 1.0e-9);
+}
+
 TEST(GlobalDriverTest, DefaultLaminateSolverUsesDirectCoreRouteWhenSupported) {
     LaminateScriptedSolver scriptedFallbackSolver;
     lamopt::CoreLaminateSection1RespSubproblemSolver directLaminateSolver;
