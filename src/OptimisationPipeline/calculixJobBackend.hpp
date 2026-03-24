@@ -4,6 +4,7 @@
 #include "responseSchema.hpp"
 
 #include <cstdlib>
+#include <deque>
 #include <regex>
 
 namespace lamopt {
@@ -124,6 +125,14 @@ public:
         : JobBackend(config)
         , m_config(std::move(config)) {}
 
+    AnalysisResult evaluate(const AnalysisRequest& request) override {
+        AnalysisResult result = JobBackend::evaluate(request);
+        if (!result.isSuccessful()) {
+            appendFailureSummary(result);
+        }
+        return result;
+    }
+
 protected:
     AnalysisResult parseSuccessfulRun(const ExecutionPaths& paths,
                                       const AnalysisDiagnostics& diagnostics) const override {
@@ -188,6 +197,43 @@ protected:
 
 private:
     CalculixJobConfig m_config;
+
+    void appendFailureSummary(AnalysisResult& result) const {
+        if (result.diagnostics.runDirectory.empty()) {
+            return;
+        }
+
+        const std::filesystem::path runDirectory = result.diagnostics.runDirectory;
+        const std::filesystem::path renderedInputPath = runDirectory / m_config.renderedInputFilename;
+        const std::filesystem::path resultPath = runDirectory / m_config.resultFilename;
+        const std::string jobStem = std::filesystem::path(m_config.renderedInputFilename).stem().string();
+        const std::filesystem::path datPath = runDirectory / (jobStem + ".dat");
+        const std::filesystem::path staPath = runDirectory / (jobStem + ".sta");
+        const std::filesystem::path frdPath = runDirectory / (jobStem + ".frd");
+
+        std::ostringstream summary;
+        summary << "CalculiX failure summary: run_directory=" << sanitizeSnippet(runDirectory.string())
+                << "; rendered_input=" << existenceLabel(renderedInputPath)
+                << "; result_file=" << existenceLabel(resultPath)
+                << "; dat=" << existenceLabel(datPath)
+                << "; sta=" << existenceLabel(staPath)
+                << "; frd=" << existenceLabel(frdPath);
+
+        if (!result.diagnostics.command.empty()) {
+            summary << "; command=" << sanitizeSnippet(result.diagnostics.command);
+        }
+        if (!result.diagnostics.standardOutputPath.empty()) {
+            summary << "; stdout_tail=" << sanitizeSnippet(readTail(result.diagnostics.standardOutputPath));
+        }
+        if (!result.diagnostics.standardErrorPath.empty()) {
+            summary << "; stderr_tail=" << sanitizeSnippet(readTail(result.diagnostics.standardErrorPath));
+        }
+
+        if (!result.diagnostics.message.empty() && result.diagnostics.message.back() != ' ') {
+            result.diagnostics.message += ' ';
+        }
+        result.diagnostics.message += summary.str();
+    }
 
     [[nodiscard]] bool usesResponseSchema() const {
         return !m_config.rawScalarExtractions.empty()
@@ -306,6 +352,58 @@ private:
             return rule.label + " in " + sourcePath.string();
         }
         return sourcePath.string();
+    }
+
+    [[nodiscard]] static std::string existenceLabel(const std::filesystem::path& path) {
+        std::error_code errorCode;
+        return std::filesystem::exists(path, errorCode)
+            ? ("present(" + path.filename().string() + ")")
+            : ("missing(" + path.filename().string() + ")");
+    }
+
+    [[nodiscard]] static std::string readTail(const std::filesystem::path& path,
+                                              const std::size_t maxLines = 5) {
+        std::ifstream stream(path);
+        if (!stream) {
+            return "unavailable";
+        }
+
+        std::deque<std::string> lines;
+        std::string line;
+        while (std::getline(stream, line)) {
+            lines.push_back(line);
+            if (lines.size() > maxLines) {
+                lines.pop_front();
+            }
+        }
+
+        if (lines.empty()) {
+            return "empty";
+        }
+
+        std::ostringstream tail;
+        bool first = true;
+        for (const std::string& tailLine : lines) {
+            if (!first) {
+                tail << " | ";
+            }
+            first = false;
+            tail << tailLine;
+        }
+        return tail.str();
+    }
+
+    [[nodiscard]] static std::string sanitizeSnippet(const std::string& value) {
+        std::string sanitized;
+        sanitized.reserve(value.size());
+        for (const char character : value) {
+            if (character == '\n' || character == '\r' || character == '\t') {
+                sanitized += ' ';
+            } else {
+                sanitized += character;
+            }
+        }
+        return sanitized.empty() ? std::string("empty") : sanitized;
     }
 };
 

@@ -149,7 +149,11 @@ Status legend:
   - current status: optimisation runs can now be exported as structured `optimisation_summary.json` and `iteration_history.csv` artifacts
   - current status: exported summary data includes final design, objectives, constraints, convergence status, and backend diagnostics
   - current status: regression coverage verifies the structured production artifacts are written for an active driver run
-- `[ ]` Add failure summaries and diagnostics tailored to real CalculiX runs.
+- `[x]` Add failure summaries and diagnostics tailored to real CalculiX runs.
+  - current status: failed CalculiX runs now append a backend-specific failure summary with run-directory artifact presence for `job.inp`, `job.dat`, `job.sta`, `job.frd`, and the parsed result file
+  - current status: command-failure diagnostics now include sanitized stdout/stderr tails from the captured CalculiX logs
+  - current status: invalid-output diagnostics now preserve the extraction error while also reporting which CalculiX artifacts were present or missing
+  - current status: regression coverage verifies both command-failure and extraction-failure summaries
 
 ## Current Snapshot
 
@@ -163,4 +167,4 @@ Status legend:
 
 ## Next Implementation Step
 
-- `[ ]` Add failure summaries and diagnostics tailored to real CalculiX runs.
+- `[ ]` Consolidate the specialized subproblem adapters behind a cleaner production-facing configuration/factory layer.

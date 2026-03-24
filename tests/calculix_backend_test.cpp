@@ -372,7 +372,7 @@ TEST(CalculixBackendTest, BackendReportsCommandFailure) {
 
     lamopt::CalculixJobConfig config;
     config.templateInputPath = templatePath;
-    config.launchCommandTemplate = "exit 3";
+    config.launchCommandTemplate = "echo stdout marker; echo stderr marker >&2; exit 3";
     config.scratchRoot = tempDirectory;
 
     lamopt::CalculixJobBackend backend(config);
@@ -385,6 +385,9 @@ TEST(CalculixBackendTest, BackendReportsCommandFailure) {
 
     EXPECT_EQ(result.status, lamopt::AnalysisStatus::BackendFailure);
     EXPECT_EQ(result.diagnostics.exitCode, 3);
+    EXPECT_NE(result.diagnostics.message.find("CalculiX failure summary:"), std::string::npos);
+    EXPECT_NE(result.diagnostics.message.find("stdout_tail=stdout marker"), std::string::npos);
+    EXPECT_NE(result.diagnostics.message.find("stderr_tail=stderr marker"), std::string::npos);
 }
 
 TEST(CalculixBackendTest, BackendReportsTimeout) {
@@ -406,6 +409,40 @@ TEST(CalculixBackendTest, BackendReportsTimeout) {
     const lamopt::AnalysisResult result = backend.evaluate(request);
 
     EXPECT_EQ(result.status, lamopt::AnalysisStatus::Timeout);
+}
+
+TEST(CalculixBackendTest, BackendSummarisesExtractionFailureArtifacts) {
+    const std::filesystem::path tempDirectory = TempPath("calculix_invalid_output_summary");
+    const std::filesystem::path templatePath = WriteTemplate(tempDirectory);
+    const std::filesystem::path fixturePath =
+        std::filesystem::path(__FILE__).parent_path() / "fixtures/calculix/results_sample.dat";
+
+    lamopt::CalculixJobConfig config;
+    config.templateInputPath = templatePath;
+    config.launchCommandTemplate = "cp " + fixturePath.string() + " {job_name}.dat";
+    config.parameterMappings = {{"{{X0}}", 0}, {"{{X1}}", 1}};
+    config.scratchRoot = tempDirectory;
+    config.objectiveExtractions = {
+        {std::filesystem::path("{job_name}.dat"),
+         "THIS PATTERN DOES NOT EXIST",
+         1,
+         lamopt::CalculixMatchSelection::Last,
+         1.0,
+         0.0,
+         "missing_objective"}
+    };
+
+    lamopt::CalculixJobBackend backend(config);
+
+    lamopt::AnalysisRequest request;
+    request.designVariables = Eigen::Vector2d(1.0, 2.0);
+
+    const lamopt::AnalysisResult result = backend.evaluate(request);
+
+    EXPECT_EQ(result.status, lamopt::AnalysisStatus::InvalidOutput);
+    EXPECT_NE(result.diagnostics.message.find("CalculiX failure summary:"), std::string::npos);
+    EXPECT_NE(result.diagnostics.message.find("dat=present(job.dat)"), std::string::npos);
+    EXPECT_NE(result.diagnostics.message.find("result_file=missing(analysis_results.txt)"), std::string::npos);
 }
 
 int main(int argc, char** argv) {
