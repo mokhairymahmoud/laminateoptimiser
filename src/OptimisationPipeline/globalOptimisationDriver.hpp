@@ -14,6 +14,7 @@
 #include <fstream>
 #include <limits>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -57,6 +58,16 @@ struct GlobalOptimisationResult {
     std::string message;
 };
 
+struct CheckpointState {
+    bool converged = false;
+    AnalysisStatus status = AnalysisStatus::BackendFailure;
+    Eigen::VectorXd design;
+    std::size_t historyCount = 0;
+    std::string message;
+};
+
+inline CheckpointState ReadCheckpoint(const std::filesystem::path& checkpointPath);
+
 class GlobalOptimisationDriver {
 public:
     GlobalOptimisationDriver(AnalysisBackend& analysisBackend,
@@ -69,6 +80,23 @@ public:
         , m_subproblemSolver(subproblemSolver)
         , m_options(options)
         , m_laminationDerivativeProvider(laminationDerivativeProvider) {}
+
+    GlobalOptimisationResult optimiseFromCheckpoint(const std::filesystem::path& checkpointPath,
+                                                    const AnalysisRequest& requestTemplate) {
+        const CheckpointState checkpoint = ReadCheckpoint(checkpointPath);
+        AnalysisRequest resumedRequest = requestTemplate;
+        resumedRequest.designVariables = checkpoint.design;
+
+        GlobalOptimisationResult result = optimise(resumedRequest);
+        if (checkpoint.converged) {
+            appendDiagnosticMessage(result.message, "Checkpoint was already marked converged.");
+        } else {
+            appendDiagnosticMessage(result.message,
+                                    "Resumed from checkpoint with " + std::to_string(checkpoint.historyCount)
+                                        + " recorded iterations.");
+        }
+        return result;
+    }
 
     GlobalOptimisationResult optimise(const AnalysisRequest& initialRequest) {
         GlobalOptimisationResult result;
@@ -460,6 +488,88 @@ inline void WriteCheckpoint(const std::filesystem::path& checkpointPath,
     }
     checkpoint << '\n';
     checkpoint << "history_count=" << result.history.size() << '\n';
+}
+
+inline CheckpointState ReadCheckpoint(const std::filesystem::path& checkpointPath) {
+    std::ifstream checkpoint(checkpointPath);
+    if (!checkpoint) {
+        throw std::runtime_error("Unable to open checkpoint file: " + checkpointPath.string());
+    }
+
+    CheckpointState state;
+    bool sawConverged = false;
+    bool sawStatus = false;
+    bool sawDesign = false;
+    bool sawHistoryCount = false;
+
+    std::string line;
+    while (std::getline(checkpoint, line)) {
+        const std::size_t separator = line.find('=');
+        if (separator == std::string::npos) {
+            continue;
+        }
+
+        const std::string key = line.substr(0, separator);
+        const std::string value = line.substr(separator + 1);
+
+        if (key == "converged") {
+            if (value == "true") {
+                state.converged = true;
+            } else if (value == "false") {
+                state.converged = false;
+            } else {
+                throw std::runtime_error("Invalid checkpoint converged value: " + value);
+            }
+            sawConverged = true;
+            continue;
+        }
+
+        if (key == "message") {
+            state.message = value;
+            continue;
+        }
+
+        if (key == "status") {
+            const std::optional<AnalysisStatus> status = ParseAnalysisStatus(value);
+            if (!status.has_value()) {
+                throw std::runtime_error("Invalid checkpoint analysis status: " + value);
+            }
+            state.status = *status;
+            sawStatus = true;
+            continue;
+        }
+
+        if (key == "design") {
+            if (value.empty()) {
+                state.design = Eigen::VectorXd();
+            } else {
+                std::vector<double> entries;
+                std::stringstream values(value);
+                std::string token;
+                while (std::getline(values, token, ',')) {
+                    entries.push_back(std::stod(token));
+                }
+                state.design = Eigen::VectorXd::Zero(static_cast<Eigen::Index>(entries.size()));
+                for (std::size_t index = 0; index < entries.size(); ++index) {
+                    state.design(static_cast<Eigen::Index>(index)) = entries[index];
+                }
+            }
+            sawDesign = true;
+            continue;
+        }
+
+        if (key == "history_count") {
+            state.historyCount = static_cast<std::size_t>(std::stoull(value));
+            sawHistoryCount = true;
+        }
+    }
+
+    if (!sawConverged || !sawStatus || !sawDesign || !sawHistoryCount) {
+        throw std::runtime_error("Checkpoint file is missing one or more required fields: "
+                                 + checkpointPath.string());
+    }
+
+    return state;
 }
 
 }  // namespace lamopt

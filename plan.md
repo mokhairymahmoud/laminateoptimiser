@@ -141,7 +141,10 @@ Status legend:
   - current status: regression coverage now exercises complete-model recovery and mixed backend-plus-laminate gradient assembly on small laminate benchmarks
   - current status: extracted FE scalar quantities can now flow through response-schema assembly and into optimiser-side laminate derivatives via an explicit chain-rule binding layer
   - current status: the active Composipy benchmark now has a production extracted-quantity derivative provider driven by real FE response values, with unit and real-CalculiX regression coverage
-- `[ ]` Add restart/resume from checkpoint into the active driver flow.
+- `[x]` Add restart/resume from checkpoint into the active driver flow.
+  - current status: checkpoint files now support round-trip parsing back into driver state
+  - current status: the active driver can resume from a saved checkpoint design through `optimiseFromCheckpoint(...)`
+  - current status: regression coverage verifies resumed runs match an uninterrupted deterministic run
 - `[ ]` Add richer production logging/output formats.
 - `[ ]` Add failure summaries and diagnostics tailored to real CalculiX runs.
 
@@ -157,4 +160,4 @@ Status legend:
 
 ## Next Implementation Step
 
-- `[ ]` Add restart/resume from checkpoint into the active driver flow.
+- `[ ]` Add richer production logging/output formats.

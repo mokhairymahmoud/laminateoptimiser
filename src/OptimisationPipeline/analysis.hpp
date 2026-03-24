@@ -185,4 +185,23 @@ inline std::string AnalysisStatusToString(AnalysisStatus status) {
     return "unknown";
 }
 
+inline std::optional<AnalysisStatus> ParseAnalysisStatus(const std::string& status) {
+    if (status == "success") {
+        return AnalysisStatus::Success;
+    }
+    if (status == "backend_failure") {
+        return AnalysisStatus::BackendFailure;
+    }
+    if (status == "timeout") {
+        return AnalysisStatus::Timeout;
+    }
+    if (status == "invalid_output") {
+        return AnalysisStatus::InvalidOutput;
+    }
+    if (status == "missing_gradients") {
+        return AnalysisStatus::MissingGradients;
+    }
+    return std::nullopt;
+}
+
 }  // namespace lamopt

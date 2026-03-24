@@ -90,6 +90,20 @@ public:
     int callCount = 0;
 };
 
+class HalvingSolver final : public lamopt::SubproblemSolver {
+public:
+    lamopt::SubproblemResult solve(const lamopt::ApproximationProblem& problem) override {
+        lamopt::SubproblemResult result;
+        result.success = true;
+        result.iterations = 1;
+        result.candidateDesign = 0.5 * problem.referenceDesign;
+        result.predictedObjectives = 0.25 * problem.objectiveValues;
+        result.predictedConstraints = Eigen::VectorXd::Constant(problem.constraintValues.size(), -1.0);
+        result.message = "halving candidate";
+        return result;
+    }
+};
+
 class LaminateScriptedSolver final : public lamopt::SubproblemSolver {
 public:
     lamopt::SubproblemResult solve(const lamopt::ApproximationProblem& problem) override {
@@ -242,6 +256,77 @@ TEST(GlobalDriverTest, DriverReportsConfiguredSensitivityPolicyWhenFallbackIsDis
 
     EXPECT_EQ(result.analysis.status, lamopt::AnalysisStatus::MissingGradients);
     EXPECT_NE(result.analysis.diagnostics.message.find("Configured backend sensitivity policy: objective[0]=backend_native; constraint[0]=finite_difference."),
+              std::string::npos);
+}
+
+TEST(GlobalDriverTest, DriverCanResumeFromCheckpointAndMatchUninterruptedRun) {
+    QuadraticBackend partialBackend(true);
+    lamopt::LinearApproximationBuilder approximationBuilder;
+    HalvingSolver subproblemSolver;
+
+    lamopt::DriverOptions partialOptions;
+    partialOptions.maxOuterIterations = 2;
+    partialOptions.maxSubIterations = 1;
+    partialOptions.requestSensitivities = true;
+    partialOptions.stagnationTolerance = 1.0e-12;
+
+    lamopt::GlobalOptimisationDriver partialDriver(
+        partialBackend,
+        approximationBuilder,
+        subproblemSolver,
+        partialOptions
+    );
+
+    lamopt::AnalysisRequest request;
+    request.designVariables = Eigen::VectorXd::Constant(1, 1.0);
+    request.workDirectory = TempPath("driver_resume_partial");
+
+    const lamopt::GlobalOptimisationResult partialResult = partialDriver.optimise(request);
+    ASSERT_FALSE(partialResult.converged);
+    ASSERT_EQ(partialResult.history.size(), 2U);
+
+    const std::filesystem::path checkpointPath = request.workDirectory / "driver.chk";
+    lamopt::WriteCheckpoint(checkpointPath, partialResult);
+    const lamopt::CheckpointState checkpoint = lamopt::ReadCheckpoint(checkpointPath);
+
+    EXPECT_FALSE(checkpoint.converged);
+    EXPECT_EQ(checkpoint.status, lamopt::AnalysisStatus::Success);
+    EXPECT_EQ(checkpoint.historyCount, 2U);
+    EXPECT_TRUE(checkpoint.design.isApprox(partialResult.design, 1.0e-12));
+
+    QuadraticBackend resumedBackend(true);
+    HalvingSolver resumedSolver;
+    lamopt::DriverOptions resumedOptions = partialOptions;
+    lamopt::GlobalOptimisationDriver resumedDriver(
+        resumedBackend,
+        approximationBuilder,
+        resumedSolver,
+        resumedOptions
+    );
+
+    lamopt::AnalysisRequest resumedTemplate = request;
+    resumedTemplate.workDirectory = TempPath("driver_resume_continued");
+    const lamopt::GlobalOptimisationResult resumedResult =
+        resumedDriver.optimiseFromCheckpoint(checkpointPath, resumedTemplate);
+
+    QuadraticBackend directBackend(true);
+    HalvingSolver directSolver;
+    lamopt::DriverOptions directOptions = partialOptions;
+    directOptions.maxOuterIterations = 4;
+    lamopt::GlobalOptimisationDriver directDriver(
+        directBackend,
+        approximationBuilder,
+        directSolver,
+        directOptions
+    );
+
+    lamopt::AnalysisRequest directRequest = request;
+    directRequest.workDirectory = TempPath("driver_resume_direct");
+    const lamopt::GlobalOptimisationResult directResult = directDriver.optimise(directRequest);
+
+    EXPECT_TRUE(resumedResult.design.isApprox(directResult.design, 1.0e-12));
+    EXPECT_NEAR(resumedResult.analysis.objectives(0), directResult.analysis.objectives(0), 1.0e-12);
+    EXPECT_NE(resumedResult.message.find("Resumed from checkpoint with 2 recorded iterations."),
               std::string::npos);
 }
 
