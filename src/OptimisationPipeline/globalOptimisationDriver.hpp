@@ -66,7 +66,16 @@ struct CheckpointState {
     std::string message;
 };
 
+struct OptimisationLogPaths {
+    std::filesystem::path summaryJsonPath;
+    std::filesystem::path historyCsvPath;
+};
+
 inline CheckpointState ReadCheckpoint(const std::filesystem::path& checkpointPath);
+inline std::string formatFlatVector(const Eigen::VectorXd& vector);
+inline std::string formatJsonVector(const Eigen::VectorXd& vector);
+inline std::string escapeJson(const std::string& value);
+inline std::string escapeCsv(const std::string& value);
 
 class GlobalOptimisationDriver {
 public:
@@ -490,6 +499,69 @@ inline void WriteCheckpoint(const std::filesystem::path& checkpointPath,
     checkpoint << "history_count=" << result.history.size() << '\n';
 }
 
+inline OptimisationLogPaths WriteOptimisationArtifacts(const std::filesystem::path& outputDirectory,
+                                                       const GlobalOptimisationResult& result) {
+    std::filesystem::create_directories(outputDirectory);
+
+    const OptimisationLogPaths paths{
+        outputDirectory / "optimisation_summary.json",
+        outputDirectory / "iteration_history.csv"
+    };
+
+    {
+        std::ofstream summary(paths.summaryJsonPath);
+        if (!summary) {
+            throw std::runtime_error("Unable to write optimisation summary: " + paths.summaryJsonPath.string());
+        }
+
+        summary << "{\n";
+        summary << "  \"converged\": " << (result.converged ? "true" : "false") << ",\n";
+        summary << "  \"message\": \"" << escapeJson(result.message) << "\",\n";
+        summary << "  \"status\": \"" << AnalysisStatusToString(result.analysis.status) << "\",\n";
+        summary << "  \"design\": " << formatJsonVector(result.design) << ",\n";
+        summary << "  \"objectives\": " << formatJsonVector(result.analysis.objectives) << ",\n";
+        summary << "  \"constraints\": " << formatJsonVector(result.analysis.constraints) << ",\n";
+        summary << "  \"history_count\": " << result.history.size() << ",\n";
+        summary << "  \"diagnostics\": {\n";
+        summary << "    \"backend_name\": \"" << escapeJson(result.analysis.diagnostics.backendName) << "\",\n";
+        summary << "    \"message\": \"" << escapeJson(result.analysis.diagnostics.message) << "\",\n";
+        summary << "    \"command\": \"" << escapeJson(result.analysis.diagnostics.command) << "\",\n";
+        summary << "    \"run_directory\": \""
+                << escapeJson(result.analysis.diagnostics.runDirectory.string()) << "\",\n";
+        summary << "    \"stdout_path\": \""
+                << escapeJson(result.analysis.diagnostics.standardOutputPath.string()) << "\",\n";
+        summary << "    \"stderr_path\": \""
+                << escapeJson(result.analysis.diagnostics.standardErrorPath.string()) << "\",\n";
+        summary << "    \"exit_code\": " << result.analysis.diagnostics.exitCode << ",\n";
+        summary << "    \"attempts\": " << result.analysis.diagnostics.attempts << "\n";
+        summary << "  }\n";
+        summary << "}\n";
+    }
+
+    {
+        std::ofstream history(paths.historyCsvPath);
+        if (!history) {
+            throw std::runtime_error("Unable to write iteration history: " + paths.historyCsvPath.string());
+        }
+
+        history << "outer_iteration,sub_iteration,accepted,reference_objective,candidate_objective,max_constraint,design,damping_before,damping_after,message\n";
+        for (const IterationRecord& record : result.history) {
+            history << record.outerIteration << ','
+                    << record.subIteration << ','
+                    << (record.accepted ? "true" : "false") << ','
+                    << record.referenceObjective << ','
+                    << record.candidateObjective << ','
+                    << record.maxConstraint << ",\""
+                    << escapeCsv(formatFlatVector(record.design)) << "\",\""
+                    << escapeCsv(formatFlatVector(record.dampingFactorsBefore)) << "\",\""
+                    << escapeCsv(formatFlatVector(record.dampingFactorsAfter)) << "\",\""
+                    << escapeCsv(record.message) << "\"\n";
+        }
+    }
+
+    return paths;
+}
+
 inline CheckpointState ReadCheckpoint(const std::filesystem::path& checkpointPath) {
     std::ifstream checkpoint(checkpointPath);
     if (!checkpoint) {
@@ -570,6 +642,71 @@ inline CheckpointState ReadCheckpoint(const std::filesystem::path& checkpointPat
     }
 
     return state;
+}
+
+inline std::string formatFlatVector(const Eigen::VectorXd& vector) {
+    std::ostringstream stream;
+    for (Eigen::Index index = 0; index < vector.size(); ++index) {
+        if (index != 0) {
+            stream << ';';
+        }
+        stream << vector(index);
+    }
+    return stream.str();
+}
+
+inline std::string formatJsonVector(const Eigen::VectorXd& vector) {
+    std::ostringstream stream;
+    stream << '[';
+    for (Eigen::Index index = 0; index < vector.size(); ++index) {
+        if (index != 0) {
+            stream << ", ";
+        }
+        stream << vector(index);
+    }
+    stream << ']';
+    return stream.str();
+}
+
+inline std::string escapeJson(const std::string& value) {
+    std::string escaped;
+    escaped.reserve(value.size());
+    for (const char character : value) {
+        switch (character) {
+            case '\\':
+                escaped += "\\\\";
+                break;
+            case '"':
+                escaped += "\\\"";
+                break;
+            case '\n':
+                escaped += "\\n";
+                break;
+            case '\r':
+                escaped += "\\r";
+                break;
+            case '\t':
+                escaped += "\\t";
+                break;
+            default:
+                escaped += character;
+                break;
+        }
+    }
+    return escaped;
+}
+
+inline std::string escapeCsv(const std::string& value) {
+    std::string escaped;
+    escaped.reserve(value.size());
+    for (const char character : value) {
+        if (character == '"') {
+            escaped += "\"\"";
+        } else {
+            escaped += character;
+        }
+    }
+    return escaped;
 }
 
 }  // namespace lamopt

@@ -145,7 +145,10 @@ Status legend:
   - current status: checkpoint files now support round-trip parsing back into driver state
   - current status: the active driver can resume from a saved checkpoint design through `optimiseFromCheckpoint(...)`
   - current status: regression coverage verifies resumed runs match an uninterrupted deterministic run
-- `[ ]` Add richer production logging/output formats.
+- `[x]` Add richer production logging/output formats.
+  - current status: optimisation runs can now be exported as structured `optimisation_summary.json` and `iteration_history.csv` artifacts
+  - current status: exported summary data includes final design, objectives, constraints, convergence status, and backend diagnostics
+  - current status: regression coverage verifies the structured production artifacts are written for an active driver run
 - `[ ]` Add failure summaries and diagnostics tailored to real CalculiX runs.
 
 ## Current Snapshot
@@ -160,4 +163,4 @@ Status legend:
 
 ## Next Implementation Step
 
-- `[ ]` Add richer production logging/output formats.
+- `[ ]` Add failure summaries and diagnostics tailored to real CalculiX runs.

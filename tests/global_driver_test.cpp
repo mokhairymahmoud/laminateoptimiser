@@ -7,6 +7,8 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <fstream>
+#include <sstream>
 
 namespace {
 
@@ -328,6 +330,50 @@ TEST(GlobalDriverTest, DriverCanResumeFromCheckpointAndMatchUninterruptedRun) {
     EXPECT_NEAR(resumedResult.analysis.objectives(0), directResult.analysis.objectives(0), 1.0e-12);
     EXPECT_NE(resumedResult.message.find("Resumed from checkpoint with 2 recorded iterations."),
               std::string::npos);
+}
+
+TEST(GlobalDriverTest, DriverWritesStructuredProductionArtifacts) {
+    QuadraticBackend backend(true);
+    lamopt::LinearApproximationBuilder approximationBuilder;
+    lamopt::GradientPenaltySubproblemSolver subproblemSolver({4.0, 5.0, 1.0e-12});
+
+    lamopt::DriverOptions options;
+    options.maxOuterIterations = 12;
+    options.maxSubIterations = 4;
+    options.requestSensitivities = true;
+    options.stagnationTolerance = 5.0e-2;
+
+    lamopt::GlobalOptimisationDriver driver(backend, approximationBuilder, subproblemSolver, options);
+
+    lamopt::AnalysisRequest request;
+    request.designVariables = Eigen::Vector2d(2.0, -1.0);
+    request.workDirectory = TempPath("driver_artifact_run");
+    request.lowerBounds = Eigen::Vector2d::Constant(-5.0);
+    request.upperBounds = Eigen::Vector2d::Constant(5.0);
+
+    const lamopt::GlobalOptimisationResult result = driver.optimise(request);
+    ASSERT_TRUE(result.converged);
+    ASSERT_FALSE(result.history.empty());
+
+    const std::filesystem::path artifactDirectory = TempPath("driver_artifact_logs");
+    const lamopt::OptimisationLogPaths paths = lamopt::WriteOptimisationArtifacts(artifactDirectory, result);
+
+    EXPECT_TRUE(std::filesystem::exists(paths.summaryJsonPath));
+    EXPECT_TRUE(std::filesystem::exists(paths.historyCsvPath));
+
+    std::ifstream summaryFile(paths.summaryJsonPath);
+    std::stringstream summaryBuffer;
+    summaryBuffer << summaryFile.rdbuf();
+    EXPECT_NE(summaryBuffer.str().find("\"converged\": true"), std::string::npos);
+    EXPECT_NE(summaryBuffer.str().find("\"status\": \"success\""), std::string::npos);
+    EXPECT_NE(summaryBuffer.str().find("\"backend_name\": \"\""), std::string::npos);
+    EXPECT_NE(summaryBuffer.str().find("\"history_count\": "), std::string::npos);
+
+    std::ifstream historyFile(paths.historyCsvPath);
+    std::stringstream historyBuffer;
+    historyBuffer << historyFile.rdbuf();
+    EXPECT_NE(historyBuffer.str().find("outer_iteration,sub_iteration,accepted"), std::string::npos);
+    EXPECT_NE(historyBuffer.str().find("true"), std::string::npos);
 }
 
 TEST(GlobalDriverTest, DriverRejectsNonImprovingCandidateAndIncreasesDamping) {
