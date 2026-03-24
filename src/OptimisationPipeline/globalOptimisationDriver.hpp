@@ -220,7 +220,7 @@ private:
             if (baseResult.sensitivityPolicy.has_value()) {
                 appendDiagnosticMessage(
                     baseResult.diagnostics.message,
-                    "Configured sensitivity policy: "
+                    "Configured backend sensitivity policy: "
                         + DescribeResponseSensitivityPolicy(*baseResult.sensitivityPolicy) + "."
                 );
             }

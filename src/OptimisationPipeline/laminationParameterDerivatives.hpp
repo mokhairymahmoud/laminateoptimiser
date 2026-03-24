@@ -4,6 +4,7 @@
 
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -12,6 +13,12 @@ namespace lamopt {
 struct GradientContributionMatrix {
     Eigen::MatrixXd values;
     Eigen::MatrixXi mask;
+};
+
+struct ExtractedScalarPowerLawQuantityRule {
+    std::string id;
+    Eigen::Index designVariableIndex = 0;
+    double exponent = 1.0;
 };
 
 struct LaminationParameterDerivativeResult {
@@ -519,6 +526,162 @@ private:
 
     SeparableLaminateResponseModel m_model;
     SeparableLaminationParameterDerivativeOptions m_options;
+};
+
+class ExtractedScalarPowerLawDerivativeProvider final : public LaminationParameterDerivativeProvider {
+public:
+    ExtractedScalarPowerLawDerivativeProvider(std::vector<ExtractedScalarPowerLawQuantityRule> quantityRules,
+                                             std::vector<DerivedScalarResponseRule> objectiveRules,
+                                             std::vector<DerivedScalarResponseRule> constraintRules)
+        : m_quantityRules(std::move(quantityRules))
+        , m_objectiveRules(std::move(objectiveRules))
+        , m_constraintRules(std::move(constraintRules)) {}
+
+    [[nodiscard]] bool supports(const AnalysisRequest& request,
+                                const AnalysisResult& result) const override {
+        std::string message;
+        return validate(request, result, message);
+    }
+
+    [[nodiscard]] LaminationParameterDerivativeResult compute(const AnalysisRequest& request,
+                                                              const AnalysisResult& result) const override {
+        LaminationParameterDerivativeResult derivativeResult;
+        if (!validate(request, result, derivativeResult.message)) {
+            return derivativeResult;
+        }
+
+        const Eigen::MatrixXd quantityGradients = assembleQuantityGradients(request, result);
+
+        if (!result.hasObjectiveGradients()) {
+            derivativeResult.objectiveGradients =
+                assembleContribution(quantityGradients, request, result.extractedScalarValues, m_objectiveRules);
+        }
+        if (!result.hasConstraintGradients()) {
+            derivativeResult.constraintGradients =
+                assembleContribution(quantityGradients, request, result.extractedScalarValues, m_constraintRules);
+        }
+
+        derivativeResult.success = true;
+        derivativeResult.message =
+            "Optimiser-side gradients attached from extracted FE quantity power-law rules.";
+        return derivativeResult;
+    }
+
+private:
+    [[nodiscard]] bool validate(const AnalysisRequest& request,
+                                const AnalysisResult& result,
+                                std::string& message) const {
+        std::unordered_map<std::string, std::size_t> ids;
+        ids.reserve(m_quantityRules.size());
+
+        for (const ExtractedScalarPowerLawQuantityRule& rule : m_quantityRules) {
+            if (rule.id.empty()) {
+                message = "Extracted FE quantity power-law rules require non-empty ids.";
+                return false;
+            }
+            if (rule.designVariableIndex < 0 || rule.designVariableIndex >= request.designVariables.size()) {
+                message = "Extracted FE quantity power-law rule references an invalid design-variable index.";
+                return false;
+            }
+            if (!ids.emplace(rule.id, ids.size()).second) {
+                message = "Extracted FE quantity power-law rule ids must be unique.";
+                return false;
+            }
+            if (result.extractedScalarValues.find(rule.id) == result.extractedScalarValues.end()) {
+                message = "Extracted FE quantity not found for power-law derivative assembly: " + rule.id;
+                return false;
+            }
+            if (std::abs(request.designVariables(rule.designVariableIndex)) <= 1.0e-16) {
+                message = "Power-law derivative assembly encountered a zero design variable for quantity: " + rule.id;
+                return false;
+            }
+        }
+
+        if (result.objectives.size() != static_cast<Eigen::Index>(m_objectiveRules.size())) {
+            message = "Objective count does not match the extracted FE power-law derivative rules.";
+            return false;
+        }
+        if (result.constraints.size() != static_cast<Eigen::Index>(m_constraintRules.size())) {
+            message = "Constraint count does not match the extracted FE power-law derivative rules.";
+            return false;
+        }
+
+        if (!validateResponseRules(ids, m_objectiveRules, "objective", message)) {
+            return false;
+        }
+        if (!validateResponseRules(ids, m_constraintRules, "constraint", message)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    [[nodiscard]] static bool validateResponseRules(
+        const std::unordered_map<std::string, std::size_t>& quantityIds,
+        const std::vector<DerivedScalarResponseRule>& rules,
+        const char* responseKind,
+        std::string& message) {
+        for (const DerivedScalarResponseRule& rule : rules) {
+            if (quantityIds.find(rule.sourceId) == quantityIds.end()) {
+                message = std::string("Extracted FE power-law ") + responseKind
+                        + " rule references an unknown quantity id: " + rule.sourceId;
+                return false;
+            }
+        }
+        return true;
+    }
+
+    [[nodiscard]] Eigen::MatrixXd assembleQuantityGradients(const AnalysisRequest& request,
+                                                            const AnalysisResult& result) const {
+        Eigen::MatrixXd gradients =
+            Eigen::MatrixXd::Zero(request.designVariables.size(), static_cast<Eigen::Index>(m_quantityRules.size()));
+
+        for (std::size_t index = 0; index < m_quantityRules.size(); ++index) {
+            const ExtractedScalarPowerLawQuantityRule& rule = m_quantityRules[index];
+            const double quantityValue = result.extractedScalarValues.at(rule.id);
+            const double designValue = request.designVariables(rule.designVariableIndex);
+            gradients(rule.designVariableIndex, static_cast<Eigen::Index>(index)) =
+                rule.exponent * quantityValue / designValue;
+        }
+
+        return gradients;
+    }
+
+    [[nodiscard]] GradientContributionMatrix
+    assembleContribution(const Eigen::MatrixXd& quantityGradients,
+                         const AnalysisRequest& request,
+                         const NamedScalarResponseMap& extractedScalars,
+                         const std::vector<DerivedScalarResponseRule>& rules) const {
+        GradientContributionMatrix contribution;
+        contribution.values =
+            Eigen::MatrixXd::Zero(request.designVariables.size(), static_cast<Eigen::Index>(rules.size()));
+        contribution.mask =
+            Eigen::MatrixXi::Ones(request.designVariables.size(), static_cast<Eigen::Index>(rules.size()));
+
+        for (std::size_t iRule = 0; iRule < rules.size(); ++iRule) {
+            contribution.values.col(static_cast<Eigen::Index>(iRule)) =
+                chainFactorForRule(quantityGradients, rules[iRule], extractedScalars);
+        }
+
+        return contribution;
+    }
+
+    [[nodiscard]] Eigen::VectorXd
+    chainFactorForRule(const Eigen::MatrixXd& quantityGradients,
+                       const DerivedScalarResponseRule& rule,
+                       const NamedScalarResponseMap& extractedScalars) const {
+        const double chainFactor = EvaluateDerivedScalarResponseDerivative(rule, extractedScalars);
+        for (std::size_t index = 0; index < m_quantityRules.size(); ++index) {
+            if (m_quantityRules[index].id == rule.sourceId) {
+                return chainFactor * quantityGradients.col(static_cast<Eigen::Index>(index));
+            }
+        }
+        return Eigen::VectorXd::Zero(quantityGradients.rows());
+    }
+
+    std::vector<ExtractedScalarPowerLawQuantityRule> m_quantityRules;
+    std::vector<DerivedScalarResponseRule> m_objectiveRules;
+    std::vector<DerivedScalarResponseRule> m_constraintRules;
 };
 
 class AssembledLaminationParameterDerivativeProvider final : public LaminationParameterDerivativeProvider {

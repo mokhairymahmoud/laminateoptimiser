@@ -175,13 +175,68 @@ TEST(CalculixComposipyBenchmarkTest, DriverOptimisesRealCompositePlateBenchmark)
     EXPECT_LT(result.analysis.objectives(0), baselineResult.objectives(0));
     EXPECT_NE(result.analysis.diagnostics.message.find("Composipy benchmark responses assembled from real CalculiX output."),
               std::string::npos);
-    EXPECT_NE(result.analysis.diagnostics.message.find("Sensitivity policy: objective[0]=backend_native; constraint[0]=finite_difference; constraint[1]=finite_difference."),
+    EXPECT_NE(result.analysis.diagnostics.message.find("Backend sensitivity policy: objective[0]=backend_native; constraint[0]=finite_difference; constraint[1]=finite_difference."),
               std::string::npos);
 
     EXPECT_TRUE(std::filesystem::exists(request.workDirectory / "job.inp"));
     EXPECT_TRUE(std::filesystem::exists(result.analysis.diagnostics.runDirectory / "job.dat"));
     EXPECT_TRUE(std::filesystem::exists(result.analysis.diagnostics.standardOutputPath));
     EXPECT_TRUE(std::filesystem::exists(result.analysis.diagnostics.standardErrorPath));
+}
+
+TEST(CalculixComposipyBenchmarkTest, DriverUsesProductionExtractedQuantityDerivativeProvider) {
+    const std::optional<std::filesystem::path> executablePath = DiscoverCalculixExecutable();
+    if (!executablePath.has_value()) {
+        GTEST_SKIP() << "CalculiX executable was not found. Set LAMOPT_CCX_EXECUTABLE or CCX to enable this test.";
+    }
+
+    const std::filesystem::path tempDirectory = TempPath("calculix_composipy_benchmark_provider");
+    const std::filesystem::path templatePath = tempDirectory / "composipy_benchmark_template.inp";
+    const lamopt::CalculixComposipyBenchmarkSpec spec;
+    lamopt::WriteCalculixComposipyBenchmarkTemplate(templatePath, spec);
+
+    lamopt::CalculixComposipyBenchmarkBackend backend(
+        lamopt::MakeCalculixComposipyBenchmarkJobSetup(templatePath, tempDirectory, executablePath),
+        spec
+    );
+    auto derivativeProvider = lamopt::MakeCalculixComposipyBenchmarkDerivativeProvider(spec);
+
+    lamopt::LinearApproximationBuilder approximationBuilder;
+    lamopt::GradientPenaltySubproblemSolver subproblemSolver({0.5, 10.0, 1.0e-12});
+
+    lamopt::DriverOptions options;
+    options.maxOuterIterations = 8;
+    options.maxSubIterations = 3;
+    options.requestSensitivities = true;
+    options.gradientFallbackMode = lamopt::GradientFallbackMode::Disabled;
+    options.finiteDifferenceStep = 1.0e-3;
+    options.stagnationTolerance = 1.0e-6;
+
+    lamopt::GlobalOptimisationDriver driver(
+        backend,
+        approximationBuilder,
+        subproblemSolver,
+        options,
+        &derivativeProvider
+    );
+
+    lamopt::AnalysisRequest request;
+    request.designVariables = Eigen::VectorXd::Constant(1, 0.30);
+    request.workDirectory = tempDirectory / "driver";
+    request.lowerBounds = Eigen::VectorXd::Constant(1, 0.12);
+    request.upperBounds = Eigen::VectorXd::Constant(1, 0.30);
+    request.requestSensitivities = true;
+
+    const lamopt::GlobalOptimisationResult result = driver.optimise(request);
+
+    ASSERT_TRUE(result.analysis.isSuccessful()) << result.message << " " << result.analysis.diagnostics.message;
+    ASSERT_FALSE(result.history.empty());
+    EXPECT_TRUE(result.analysis.hasAllGradients());
+    EXPECT_LT(result.design(0), 0.30);
+    EXPECT_GT(result.design(0), 0.18);
+    EXPECT_LT(result.design(0), 0.24);
+    EXPECT_LE(result.analysis.constraints.maxCoeff(), 5.0e-3);
+    EXPECT_NE(result.analysis.diagnostics.message.find("power-law rules"), std::string::npos);
 }
 
 int main(int argc, char** argv) {

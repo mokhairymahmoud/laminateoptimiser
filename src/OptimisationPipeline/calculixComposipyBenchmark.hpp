@@ -1,6 +1,7 @@
 #pragma once
 
 #include "calculixJobBackend.hpp"
+#include "laminationParameterDerivatives.hpp"
 #include "responseSchema.hpp"
 
 #include <fstream>
@@ -66,6 +67,24 @@ MakeCalculixComposipyBenchmarkSensitivityPolicy(const CalculixComposipyBenchmark
     policy.constraintSources = {ResponseSensitivitySource::FiniteDifference,
                                 ResponseSensitivitySource::FiniteDifference};
     return policy;
+}
+
+inline std::vector<ExtractedScalarPowerLawQuantityRule>
+MakeCalculixComposipyBenchmarkQuantityDerivativeRules() {
+    return {
+        {"mass_per_area", 0, 1.0},
+        {"buckling_lambda_1", 0, 3.0},
+        {"tip_u3", 0, -3.0}
+    };
+}
+
+inline ExtractedScalarPowerLawDerivativeProvider
+MakeCalculixComposipyBenchmarkDerivativeProvider(const CalculixComposipyBenchmarkSpec& spec = {}) {
+    return ExtractedScalarPowerLawDerivativeProvider(
+        MakeCalculixComposipyBenchmarkQuantityDerivativeRules(),
+        MakeCalculixComposipyBenchmarkObjectiveRules(spec),
+        MakeCalculixComposipyBenchmarkConstraintRules(spec)
+    );
 }
 
 inline std::string FormatBenchmarkDouble(const double value) {
@@ -272,7 +291,7 @@ public:
         }
         result.diagnostics.message += "Composipy benchmark responses assembled from real CalculiX output.";
         if (request.requestSensitivities && result.sensitivityPolicy.has_value()) {
-            result.diagnostics.message += " Sensitivity policy: "
+            result.diagnostics.message += " Backend sensitivity policy: "
                                        + DescribeResponseSensitivityPolicy(*result.sensitivityPolicy) + ".";
         }
         return result;

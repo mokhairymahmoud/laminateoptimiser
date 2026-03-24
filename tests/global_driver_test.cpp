@@ -241,7 +241,7 @@ TEST(GlobalDriverTest, DriverReportsConfiguredSensitivityPolicyWhenFallbackIsDis
     const lamopt::GlobalOptimisationResult result = driver.optimise(request);
 
     EXPECT_EQ(result.analysis.status, lamopt::AnalysisStatus::MissingGradients);
-    EXPECT_NE(result.analysis.diagnostics.message.find("Configured sensitivity policy: objective[0]=backend_native; constraint[0]=finite_difference."),
+    EXPECT_NE(result.analysis.diagnostics.message.find("Configured backend sensitivity policy: objective[0]=backend_native; constraint[0]=finite_difference."),
               std::string::npos);
 }
 

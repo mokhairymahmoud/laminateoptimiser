@@ -1,9 +1,11 @@
+#include "../src/OptimisationPipeline/calculixComposipyBenchmark.hpp"
 #include "../src/OptimisationPipeline/globalOptimisationDriver.hpp"
 #include "../src/OptimisationPipeline/laminationParameterDerivatives.hpp"
 #include "../src/OptimisationPipeline/responseSchema.hpp"
 
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <filesystem>
 #include <utility>
 
@@ -279,6 +281,46 @@ private:
     GradientMode m_gradientMode = GradientMode::None;
 };
 
+class ComposipyPowerLawBackend final : public lamopt::AnalysisBackend {
+public:
+    explicit ComposipyPowerLawBackend(lamopt::CalculixComposipyBenchmarkSpec spec = {})
+        : m_spec(std::move(spec)) {}
+
+    lamopt::AnalysisResult evaluate(const lamopt::AnalysisRequest& request) override {
+        lamopt::AnalysisResult result;
+        result.status = lamopt::AnalysisStatus::Success;
+
+        const double thickness = request.designVariables(0);
+        const double massPerArea = static_cast<double>(m_spec.plyAngles.size()) * thickness;
+        const double buckling = 2.12358 * std::pow(thickness / m_spec.referencePlyThickness, 3.0);
+        const double tip = -0.714186 * std::pow(m_spec.referencePlyThickness / thickness, 3.0);
+
+        result.extractedScalarValues["mass_per_area"] = massPerArea;
+        result.extractedScalarValues["buckling_lambda_1"] = buckling;
+        result.extractedScalarValues["tip_u3"] = tip;
+
+        const auto objectiveRules = lamopt::MakeCalculixComposipyBenchmarkObjectiveRules(m_spec);
+        const auto constraintRules = lamopt::MakeCalculixComposipyBenchmarkConstraintRules(m_spec);
+        result.objectives = Eigen::VectorXd::Zero(static_cast<Eigen::Index>(objectiveRules.size()));
+        result.constraints = Eigen::VectorXd::Zero(static_cast<Eigen::Index>(constraintRules.size()));
+
+        for (std::size_t index = 0; index < objectiveRules.size(); ++index) {
+            result.objectives(static_cast<Eigen::Index>(index)) =
+                lamopt::EvaluateDerivedScalarResponseRule(objectiveRules[index], result.extractedScalarValues);
+        }
+        for (std::size_t index = 0; index < constraintRules.size(); ++index) {
+            result.constraints(static_cast<Eigen::Index>(index)) =
+                lamopt::EvaluateDerivedScalarResponseRule(constraintRules[index], result.extractedScalarValues);
+        }
+
+        result.sensitivityPolicy = lamopt::MakeCalculixComposipyBenchmarkSensitivityPolicy(m_spec);
+        return result;
+    }
+
+private:
+    lamopt::CalculixComposipyBenchmarkSpec m_spec;
+};
+
 lamopt::AnalysisRequest MakeBenchmarkRequest(const std::string& name) {
     lamopt::AnalysisRequest request;
     request.designVariables = Eigen::VectorXd::Zero(7);
@@ -512,6 +554,57 @@ TEST(LaminationParameterDerivativesTest, AssembledProviderCanFillLaminateRowsOnl
     ASSERT_TRUE(result.analysis.constraintGradientMask.has_value());
     EXPECT_EQ(result.analysis.objectiveGradientMask->minCoeff(), 1);
     EXPECT_EQ(result.analysis.constraintGradientMask->minCoeff(), 1);
+}
+
+TEST(LaminationParameterDerivativesTest, ProductionComposipyProviderBindsRealExtractedQuantityRules) {
+    const lamopt::CalculixComposipyBenchmarkSpec spec;
+    auto derivativeProvider = lamopt::MakeCalculixComposipyBenchmarkDerivativeProvider(spec);
+    ComposipyPowerLawBackend backend(spec);
+    lamopt::LinearApproximationBuilder approximationBuilder;
+    ZeroMovementSolver subproblemSolver;
+
+    lamopt::DriverOptions options;
+    options.maxOuterIterations = 1;
+    options.maxSubIterations = 1;
+    options.requestSensitivities = true;
+    options.gradientFallbackMode = lamopt::GradientFallbackMode::Disabled;
+    options.stagnationTolerance = 1.0e-12;
+
+    lamopt::GlobalOptimisationDriver driver(backend,
+                                            approximationBuilder,
+                                            subproblemSolver,
+                                            options,
+                                            &derivativeProvider);
+
+    lamopt::AnalysisRequest request;
+    request.designVariables = Eigen::VectorXd::Constant(1, spec.referencePlyThickness);
+    request.requestSensitivities = true;
+    request.workDirectory = TempPath("laminate_derivative_composipy_provider");
+
+    const lamopt::GlobalOptimisationResult result = driver.optimise(request);
+
+    ASSERT_TRUE(result.converged);
+    ASSERT_TRUE(result.analysis.hasAllGradients());
+    ASSERT_TRUE(result.analysis.objectiveGradients.has_value());
+    ASSERT_TRUE(result.analysis.constraintGradients.has_value());
+
+    const double thickness = request.designVariables(0);
+    const double massPerArea = result.analysis.extractedScalarValues.at("mass_per_area");
+    const double buckling = result.analysis.extractedScalarValues.at("buckling_lambda_1");
+    const double tip = result.analysis.extractedScalarValues.at("tip_u3");
+
+    Eigen::MatrixXd expectedObjectiveGradients(1, 1);
+    expectedObjectiveGradients(0, 0) = massPerArea / thickness;
+
+    Eigen::MatrixXd expectedConstraintGradients(1, 2);
+    expectedConstraintGradients(0, 0) =
+        (-spec.requiredBucklingFactor / (buckling * buckling)) * (3.0 * buckling / thickness);
+    expectedConstraintGradients(0, 1) =
+        (-1.0 / spec.tipDisplacementLimit) * (-3.0 * tip / thickness);
+
+    EXPECT_TRUE(result.analysis.objectiveGradients->isApprox(expectedObjectiveGradients, 1.0e-12));
+    EXPECT_TRUE(result.analysis.constraintGradients->isApprox(expectedConstraintGradients, 1.0e-12));
+    EXPECT_NE(result.analysis.diagnostics.message.find("power-law rules"), std::string::npos);
 }
 
 int main(int argc, char** argv) {

@@ -136,11 +136,11 @@ Status legend:
 - `[x]` Keep fallback gradients configurable rather than always-on.
 - `[x]` Add structured iteration history suitable for diagnostics.
 - `[x]` Add basic checkpoint file writing.
-- `[~]` Implement the production lamination-parameter sensitivity path outside solver-native gradient support.
+- `[x]` Implement the production lamination-parameter sensitivity path outside solver-native gradient support.
   - current status: optimiser-side laminate derivative providers are now plumbed into gradient recovery before finite differences
   - current status: regression coverage now exercises complete-model recovery and mixed backend-plus-laminate gradient assembly on small laminate benchmarks
   - current status: extracted FE scalar quantities can now flow through response-schema assembly and into optimiser-side laminate derivatives via an explicit chain-rule binding layer
-  - remaining work: replace the in-test response assembly with the production laminate derivative chain driven by real FE response extraction
+  - current status: the active Composipy benchmark now has a production extracted-quantity derivative provider driven by real FE response values, with unit and real-CalculiX regression coverage
 - `[ ]` Add restart/resume from checkpoint into the active driver flow.
 - `[ ]` Add richer production logging/output formats.
 - `[ ]` Add failure summaries and diagnostics tailored to real CalculiX runs.
@@ -153,8 +153,8 @@ Status legend:
 - `[x]` The core laminate route is in place with shared orchestration-owned section binding helpers across both direct and fallback laminate paths.
 - `[x]` Reusable laminate section binding helpers exist in the orchestration layer.
 - `[x]` Supported laminate problems now use the direct core laminate route by default, with projection kept as fallback.
-- `[~]` The architecture correctly treats solver-native gradients as optional, and the optimiser-side lamination-parameter derivative path now supports assembled response terms plus partial-gradient merging, while the active Composipy benchmark now declares an explicit native-vs-fallback sensitivity policy, but the production laminate derivative chain is still unfinished.
+- `[x]` The architecture correctly treats solver-native gradients as optional, and the optimiser-side derivative path now supports assembled response terms, partial-gradient merging, an explicit native-vs-fallback benchmark sensitivity policy, and a production extracted-quantity chain for the active Composipy benchmark.
 
 ## Next Implementation Step
 
-- `[ ]` Replace the in-test assembled laminate derivative model with a production laminate derivative chain driven by the real FE quantities extracted for active runs.
+- `[ ]` Add restart/resume from checkpoint into the active driver flow.
