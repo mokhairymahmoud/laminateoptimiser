@@ -141,6 +141,12 @@ std::vector<lamopt::DerivedScalarResponseRule> MakeConstraintAssemblyRules() {
     };
 }
 
+lamopt::SeparableLaminateQuantityModel MakeMassOnlyQuantityModel() {
+    lamopt::SeparableLaminateQuantityModel model;
+    model.quantities.push_back(MakeAssembledQuantityModel().quantities.front());
+    return model;
+}
+
 class ZeroMovementSolver final : public lamopt::SubproblemSolver {
 public:
     lamopt::SubproblemResult solve(const lamopt::ApproximationProblem& problem) override {
@@ -279,6 +285,46 @@ private:
     std::vector<lamopt::DerivedScalarResponseRule> m_objectiveRules;
     std::vector<lamopt::DerivedScalarResponseRule> m_constraintRules;
     GradientMode m_gradientMode = GradientMode::None;
+};
+
+class PartialCoverageAssembledBackend final : public lamopt::AnalysisBackend {
+public:
+    PartialCoverageAssembledBackend(lamopt::SeparableLaminateQuantityModel extractedQuantityModel,
+                                    std::vector<lamopt::DerivedScalarResponseRule> objectiveRules,
+                                    std::vector<lamopt::DerivedScalarResponseRule> constraintRules)
+        : m_extractedQuantityModel(std::move(extractedQuantityModel))
+        , m_objectiveRules(std::move(objectiveRules))
+        , m_constraintRules(std::move(constraintRules)) {}
+
+    lamopt::AnalysisResult evaluate(const lamopt::AnalysisRequest& request) override {
+        lamopt::AnalysisResult result;
+        result.status = lamopt::AnalysisStatus::Success;
+
+        const Eigen::VectorXd rawValues = m_extractedQuantityModel.evaluateQuantities(request);
+        for (std::size_t index = 0; index < m_extractedQuantityModel.quantities.size(); ++index) {
+            result.extractedScalarValues.emplace(m_extractedQuantityModel.quantities[index].id,
+                                                 rawValues(static_cast<Eigen::Index>(index)));
+        }
+
+        result.objectives = Eigen::VectorXd::Zero(static_cast<Eigen::Index>(m_objectiveRules.size()));
+        result.constraints = Eigen::VectorXd::Zero(static_cast<Eigen::Index>(m_constraintRules.size()));
+        for (std::size_t index = 0; index < m_objectiveRules.size(); ++index) {
+            result.objectives(static_cast<Eigen::Index>(index)) =
+                lamopt::EvaluateDerivedScalarResponseRule(m_objectiveRules[index], result.extractedScalarValues);
+        }
+        for (std::size_t index = 0; index < m_constraintRules.size(); ++index) {
+            result.constraints(static_cast<Eigen::Index>(index)) =
+                lamopt::EvaluateDerivedScalarResponseRule(m_constraintRules[index], result.extractedScalarValues);
+        }
+
+        result.diagnostics.message = "partial assembled laminate benchmark";
+        return result;
+    }
+
+private:
+    lamopt::SeparableLaminateQuantityModel m_extractedQuantityModel;
+    std::vector<lamopt::DerivedScalarResponseRule> m_objectiveRules;
+    std::vector<lamopt::DerivedScalarResponseRule> m_constraintRules;
 };
 
 class ComposipyPowerLawBackend final : public lamopt::AnalysisBackend {
@@ -554,6 +600,61 @@ TEST(LaminationParameterDerivativesTest, AssembledProviderCanFillLaminateRowsOnl
     ASSERT_TRUE(result.analysis.constraintGradientMask.has_value());
     EXPECT_EQ(result.analysis.objectiveGradientMask->minCoeff(), 1);
     EXPECT_EQ(result.analysis.constraintGradientMask->minCoeff(), 1);
+}
+
+TEST(LaminationParameterDerivativesTest, AssembledProviderCanLeaveUnknownSchemaResponsesForFiniteDifference) {
+    const lamopt::SeparableLaminateQuantityModel extractedQuantityModel = MakeAssembledQuantityModel();
+    const lamopt::SeparableLaminateQuantityModel derivativeQuantityModel = MakeMassOnlyQuantityModel();
+    const auto objectiveRules = MakeObjectiveAssemblyRules();
+    const auto constraintRules = std::vector<lamopt::DerivedScalarResponseRule>{
+        {"tip_u3", lamopt::DerivedScalarResponseTransform::AbsoluteAffine, 1.0 / 3.0, -1.0, "tip_displacement_margin"}
+    };
+
+    lamopt::SeparableLaminationParameterDerivativeOptions derivativeOptions;
+    derivativeOptions.allowPartialRuleCoverage = true;
+
+    lamopt::AssembledLaminationParameterDerivativeProvider derivativeProvider(
+        derivativeQuantityModel,
+        objectiveRules,
+        constraintRules,
+        derivativeOptions
+    );
+    lamopt::LinearApproximationBuilder approximationBuilder;
+    ZeroMovementSolver subproblemSolver;
+
+    lamopt::DriverOptions options = MakeDriverOptions();
+    options.gradientFallbackMode = lamopt::GradientFallbackMode::FiniteDifference;
+
+    PartialCoverageAssembledBackend backend(extractedQuantityModel,
+                                            objectiveRules,
+                                            constraintRules);
+    lamopt::GlobalOptimisationDriver driver(backend,
+                                            approximationBuilder,
+                                            subproblemSolver,
+                                            options,
+                                            &derivativeProvider);
+
+    const lamopt::AnalysisRequest request = MakeBenchmarkRequest("laminate_derivative_schema_partial_coverage");
+    const lamopt::GlobalOptimisationResult result = driver.optimise(request);
+
+    ASSERT_TRUE(result.converged);
+    ASSERT_TRUE(result.analysis.hasAllGradients());
+    ASSERT_TRUE(result.analysis.objectiveGradients.has_value());
+    ASSERT_TRUE(result.analysis.constraintGradients.has_value());
+
+    const Eigen::MatrixXd extractedQuantityGradients = extractedQuantityModel.quantityGradients(request);
+    Eigen::MatrixXd expectedObjectiveGradients(request.designVariables.size(), 1);
+    expectedObjectiveGradients.col(0) = extractedQuantityGradients.col(0);
+
+    Eigen::MatrixXd expectedConstraintGradients(request.designVariables.size(), 1);
+    expectedConstraintGradients.col(0) =
+        lamopt::EvaluateDerivedScalarResponseDerivative(constraintRules.front(), result.analysis.extractedScalarValues)
+        * extractedQuantityGradients.col(2);
+
+    EXPECT_TRUE(result.analysis.objectiveGradients->isApprox(expectedObjectiveGradients, 1.0e-12));
+    EXPECT_TRUE(result.analysis.constraintGradients->isApprox(expectedConstraintGradients, 1.0e-5));
+    EXPECT_NE(result.analysis.diagnostics.message.find("Finite-difference gradients attached."), std::string::npos);
+    EXPECT_NE(result.analysis.diagnostics.message.find("extracted FE quantities"), std::string::npos);
 }
 
 TEST(LaminationParameterDerivativesTest, ProductionComposipyProviderBindsRealExtractedQuantityRules) {

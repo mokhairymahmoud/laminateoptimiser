@@ -84,7 +84,7 @@ public:
         result.diagnostics.standardErrorPath = paths.standardErrorPath.value_or(std::filesystem::path());
 
         try {
-            renderTemplate(request.designVariables, paths.renderedInputPath);
+            renderTemplate(request, paths.renderedInputPath);
         } catch (const std::exception& exception) {
             result.status = AnalysisStatus::InvalidOutput;
             result.diagnostics.runDirectory = runDirectory;
@@ -245,7 +245,7 @@ private:
         return m_config.defaultRunDirectoryName;
     }
 
-    void renderTemplate(const Eigen::VectorXd& designVariables,
+    void renderTemplate(const AnalysisRequest& request,
                         const std::filesystem::path& renderedInputPath) const {
         std::ifstream templateInput(m_config.templateInputPath);
         if (!templateInput) {
@@ -259,12 +259,22 @@ private:
         std::string rendered = buffer.str();
 
         for (const JobParameterMapping& mapping : m_config.parameterMappings) {
-            if (mapping.designIndex >= static_cast<std::size_t>(designVariables.size())) {
+            if (mapping.designIndex >= static_cast<std::size_t>(request.designVariables.size())) {
                 throw std::runtime_error("Design index out of bounds in "
                                          + backendName()
                                          + " parameter mapping.");
             }
-            replaceAll(rendered, mapping.token, formatDouble(designVariables(static_cast<Eigen::Index>(mapping.designIndex))));
+            replaceAll(rendered,
+                       mapping.token,
+                       formatDouble(request.designVariables(static_cast<Eigen::Index>(mapping.designIndex))));
+        }
+
+        for (const ResolvedTemplateParameter& parameter : request.templateParameters) {
+            if (parameter.token.empty()) {
+                throw std::runtime_error("Resolved template parameter token must not be empty in "
+                                         + backendName() + ".");
+            }
+            replaceAll(rendered, parameter.token, parameter.value);
         }
 
         std::ofstream output(renderedInputPath);

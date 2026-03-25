@@ -28,5 +28,6 @@ add_subdirectory(src)
 
 # Now add the tests
 enable_testing()
+add_subdirectory(examples)
 add_subdirectory(tests)
 add_subdirectory(benchmarks)

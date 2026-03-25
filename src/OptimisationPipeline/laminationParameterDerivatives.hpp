@@ -452,6 +452,7 @@ enum class LaminationParameterCoverageMode {
 
 struct SeparableLaminationParameterDerivativeOptions {
     LaminationParameterCoverageMode coverageMode = LaminationParameterCoverageMode::CompleteResponse;
+    bool allowPartialRuleCoverage = false;
 };
 
 class SeparableLaminationParameterDerivativeProvider final : public LaminationParameterDerivativeProvider {
@@ -749,13 +750,13 @@ private:
         }
 
         for (const DerivedScalarResponseRule& rule : m_objectiveRules) {
-            if (!m_quantityModel.findIndex(rule.sourceId).has_value()) {
+            if (!m_quantityModel.findIndex(rule.sourceId).has_value() && !m_options.allowPartialRuleCoverage) {
                 message = "Assembled laminate objective rule references an unknown quantity id: " + rule.sourceId;
                 return false;
             }
         }
         for (const DerivedScalarResponseRule& rule : m_constraintRules) {
-            if (!m_quantityModel.findIndex(rule.sourceId).has_value()) {
+            if (!m_quantityModel.findIndex(rule.sourceId).has_value() && !m_options.allowPartialRuleCoverage) {
                 message = "Assembled laminate constraint rule references an unknown quantity id: " + rule.sourceId;
                 return false;
             }
@@ -777,20 +778,22 @@ private:
 
         for (std::size_t iRule = 0; iRule < rules.size(); ++iRule) {
             const auto quantityIndex = m_quantityModel.findIndex(rules[iRule].sourceId);
+            if (!quantityIndex.has_value()) {
+                continue;
+            }
             const double chainFactor = EvaluateDerivedScalarResponseDerivative(rules[iRule], extractedScalars);
             contribution.values.col(static_cast<Eigen::Index>(iRule)) =
                 chainFactor * quantityGradients.col(static_cast<Eigen::Index>(*quantityIndex));
-        }
-
-        if (m_options.coverageMode == LaminationParameterCoverageMode::CompleteResponse) {
-            contribution.mask.setOnes();
-        } else {
-            for (const LaminateSectionState& sectionState : request.laminateSections) {
-                const Eigen::Index sectionSize = LaminateSectionVariableCount(sectionState);
-                contribution.mask.block(sectionState.variableOffset,
-                                        0,
-                                        sectionSize,
-                                        contribution.mask.cols()).setOnes();
+            if (m_options.coverageMode == LaminationParameterCoverageMode::CompleteResponse) {
+                contribution.mask.col(static_cast<Eigen::Index>(iRule)).setOnes();
+            } else {
+                for (const LaminateSectionState& sectionState : request.laminateSections) {
+                    const Eigen::Index sectionSize = LaminateSectionVariableCount(sectionState);
+                    contribution.mask.block(sectionState.variableOffset,
+                                            static_cast<Eigen::Index>(iRule),
+                                            sectionSize,
+                                            1).setOnes();
+                }
             }
         }
 

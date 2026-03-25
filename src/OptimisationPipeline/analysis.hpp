@@ -91,6 +91,11 @@ struct LaminateSectionState {
     int sublaminateCount = 0;
 };
 
+struct ResolvedTemplateParameter {
+    std::string token;
+    std::string value;
+};
+
 struct AnalysisRequest {
     Eigen::VectorXd designVariables;
     std::filesystem::path workDirectory;
@@ -99,6 +104,7 @@ struct AnalysisRequest {
     std::optional<Eigen::VectorXd> lowerBounds;
     std::optional<Eigen::VectorXd> upperBounds;
     std::vector<LaminateSectionState> laminateSections;
+    std::vector<ResolvedTemplateParameter> templateParameters;
 };
 
 struct AnalysisResult {

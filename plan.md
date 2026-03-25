@@ -157,6 +157,49 @@ Status legend:
   - current status: invalid-output diagnostics now preserve the extraction error while also reporting which CalculiX artifacts were present or missing
   - current status: regression coverage verifies both command-failure and extraction-failure summaries
 
+## Phase 7: Full Lamination-Parameter + Thickness Optimisation
+
+- `[~]` Keep the direct laminate core route as the primary solve path for supported laminate problems.
+  - current status: supported laminate problems already route through the direct core section-aware solver by default
+  - remaining work: broaden the direct route so it becomes the normal path for production laminate studies rather than a supported subset
+- `[~]` Freeze the canonical laminate design-variable layout used across the optimiser, laminate section binding, and FE boundary.
+  - current status: a canonical laminate section layout helper now defines the active variable ordering as `A`, `D`, optional `B`, then thickness
+  - current status: balanced/symmetric and general laminate section slices now have explicit validated offsets, sizes, and thickness indices in one place
+  - define the thickness index for each laminate section block
+  - define the lamination-parameter ordering for balanced/symmetric and general sections
+  - define how multiple laminate sections are concatenated into the global design vector
+- `[~]` Add a production FE parameterisation layer above the job backend.
+  - current status: `AnalysisRequest` can now carry resolved template parameters in addition to raw design-index substitutions
+  - current status: the shared job backend can now render FE-facing laminate tokens produced from the canonical laminate layout
+  - translate optimiser-side laminate section variables into FE-facing quantities rather than relying only on raw token-to-design-index substitution
+  - support rendering the active laminate section state into CalculiX-ready deck fragments and parameter values
+- `[ ]` Generalise the FE response schema for laminate runs beyond the current benchmark-specific extracts.
+- `[~]` Generalise the FE response schema for laminate runs beyond the current benchmark-specific extracts.
+  - current status: the active laminate-parameter CalculiX benchmark now assembles objective and constraint values through reusable response-schema rules instead of benchmark-local response formulas
+  - formalise the raw extracted FE quantities needed for objectives and constraints
+  - define reusable response transforms from extracted quantities into optimisation responses
+  - make that schema the standard CalculiX boundary for laminate benchmarks and production runs
+- `[ ]` Implement the explicit optimiser-side lamination-parameter derivative chain for real FE responses.
+- `[~]` Implement the explicit optimiser-side lamination-parameter derivative chain for real FE responses.
+  - current status: the assembled derivative provider now supports partial rule coverage, so known laminate-owned responses can be differentiated on the optimiser side while unknown FE responses remain available for finite-difference fill
+  - current status: the active laminate-parameter CalculiX benchmark now uses optimiser-side laminate gradients for the thickness objective and finite-difference fallback only for the remaining FE-only constraint response
+  - compute gradients of extracted FE quantities with respect to laminate variables on the optimiser side
+  - chain those quantity gradients through the response-schema assembly into objective and constraint gradients
+  - keep FE-native gradients optional and limited to the cases where the solver can provide them reliably
+- `[ ]` Use partial derivative coverage as the normal recovery path instead of broad finite differences.
+  - merge backend-native gradients, optimiser-side laminate gradients, and finite-difference fill only for any remaining uncovered rows
+  - keep finite differences as a narrow fallback rather than the default sensitivity mechanism for laminate studies
+- `[ ]` Broaden laminate section support in the orchestration-owned section binding layer.
+  - extend supported section shapes and sublaminate-count coverage beyond the currently instantiated set
+  - keep section validation, offsets, and ownership centralized in the shared binding helpers
+- `[~]` Add real CalculiX benchmarks that exercise lamination-parameter variables directly.
+  - current status: the repo now contains a real CalculiX laminate-parameter benchmark that renders canonical laminate section tokens into a shell-deck template and drives a section-aware optimisation run
+  - current status: regression coverage now verifies the direct laminate route moves both lamination parameters and thickness while using rendered canonical laminate template parameters in a real `ccx` run
+  - add end-to-end regression coverage where laminate parameters, not just thickness, move during optimisation
+  - verify feasibility, derivative recovery, and acceptance logic on those runs
+- `[ ]` Promote the full laminate route from benchmark-ready to production-ready only after the FE bridge and derivative chain are exercised by real runs.
+  - tune damping, restart behavior, and diagnostics after correctness is established on LP-driven cases
+
 ## Current Snapshot
 
 - `[x]` The repository has been reduced to the active optimisation architecture.
@@ -166,7 +209,8 @@ Status legend:
 - `[x]` Reusable laminate section binding helpers exist in the orchestration layer.
 - `[x]` Supported laminate problems now use the direct core laminate route by default, with projection kept as fallback.
 - `[x]` The architecture correctly treats solver-native gradients as optional, and the optimiser-side derivative path now supports assembled response terms, partial-gradient merging, an explicit native-vs-fallback benchmark sensitivity policy, and a production extracted-quantity chain for the active Composipy benchmark.
+- `[~]` Real CalculiX benchmark coverage now exists for thickness-driven studies, but full lamination-parameter-driven optimisation is still missing the production FE parameterisation and derivative bridge.
 
 ## Next Implementation Step
 
-- `[ ]` Broaden the direct laminate core route beyond the current single-objective linearized laminate problem shape.
+- `[ ]` Extend the laminate response schema and optimiser-side derivative chain from the current objective-only partial coverage to real LP-driven constraint quantities, so the laminate CalculiX path relies less on finite differences.
